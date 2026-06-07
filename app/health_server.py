@@ -24,6 +24,7 @@ from .call_control import (
     originate_webrtc_agent_test_call,
 )
 from .config import GatewayConfig
+from .livekit_call_turns import build_livekit_turns
 from .livekit_debug_events import LiveKitDebugEventStore
 from .livekit_agent_process import LiveKitAgentProcessManager
 from .livekit_web_debug import (
@@ -339,6 +340,21 @@ class HealthServer:
                             "nextSequence": (
                                 max((int(event["sequence"]) for event in events), default=after)
                             ),
+                        },
+                    )
+                    return
+
+                if parsed.path == "/livekit/web-debug/turns":
+                    room = _query_str(parsed.query, "room")
+                    events = livekit_debug_events.list_events(
+                        room=room,
+                        limit=500,
+                    )
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "status": "ok",
+                            "turns": build_livekit_turns(events),
                         },
                     )
                     return

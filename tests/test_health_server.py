@@ -1036,6 +1036,64 @@ def test_livekit_web_debug_events_supports_after_cursor():
         thread.join(timeout=3)
 
 
+def test_livekit_web_debug_turns_groups_agent_events():
+    config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        for event in (
+            {
+                "room": "web-debug-demo",
+                "participant": "browser-user",
+                "event": "asr_final",
+                "provider": "aliyun-nls",
+                "text": "你好，我想咨询物业费。",
+            },
+            {
+                "room": "web-debug-demo",
+                "event": "llm_response_final",
+                "provider": "openai-compatible",
+                "model": "qwen-plus",
+                "text": "您好，请问您想了解哪套房？",
+            },
+            {
+                "room": "web-debug-demo",
+                "event": "tts_final",
+                "provider": "aliyun-cosyvoice",
+                "model": "cosyvoice-v3-flash",
+                "voice": "longanyang",
+                "audio_duration_ms": 2400,
+            },
+        ):
+            request = Request(
+                f"http://{host}:{port}/livekit/web-debug/events",
+                data=json.dumps(event).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=3):
+                pass
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/web-debug/turns?room=web-debug-demo",
+            timeout=3,
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        assert response.status == 200
+        assert payload["status"] == "ok"
+        assert payload["turns"][0]["turn_index"] == 1
+        assert payload["turns"][0]["user_text"] == "你好，我想咨询物业费。"
+        assert payload["turns"][0]["assistant_text"] == "您好，请问您想了解哪套房？"
+        assert payload["turns"][0]["tts"]["voice"] == "longanyang"
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
 def test_livekit_web_debug_session_returns_503_when_disabled():
     config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
     server = HealthServer(config)
