@@ -706,6 +706,107 @@ class HealthServer:
                     )
                     return
 
+                if parsed.path == "/livekit/post-call-analysis/claim":
+                    if livekit_post_call_result_store is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit post-call result store disabled",
+                            },
+                        )
+                        return
+                    try:
+                        claimed = livekit_post_call_result_store.claim_next_analysis_task(
+                            self._read_json_body()
+                        )
+                    except CallControlError as err:
+                        self._send_json(
+                            HTTPStatus(err.status_code),
+                            {"status": "error", "error": str(err)},
+                        )
+                        return
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    if claimed is None:
+                        self._send_json(HTTPStatus.OK, {"status": "empty"})
+                        return
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {"status": "claimed", **claimed},
+                    )
+                    return
+
+                if parsed.path == "/livekit/post-call-analysis/complete":
+                    if livekit_post_call_result_store is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit post-call result store disabled",
+                            },
+                        )
+                        return
+                    try:
+                        completed = (
+                            livekit_post_call_result_store.complete_analysis_task(
+                                self._read_json_body()
+                            )
+                        )
+                    except CallControlError as err:
+                        self._send_json(
+                            HTTPStatus(err.status_code),
+                            {"status": "error", "error": str(err)},
+                        )
+                        return
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {"status": "completed", **completed},
+                    )
+                    return
+
+                if parsed.path == "/livekit/post-call-analysis/fail":
+                    if livekit_post_call_result_store is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit post-call result store disabled",
+                            },
+                        )
+                        return
+                    try:
+                        failed = livekit_post_call_result_store.fail_analysis_task(
+                            self._read_json_body()
+                        )
+                    except CallControlError as err:
+                        self._send_json(
+                            HTTPStatus(err.status_code),
+                            {"status": "error", "error": str(err)},
+                        )
+                        return
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {"status": "failed", **failed},
+                    )
+                    return
+
                 if parsed.path == "/livekit/web-debug/agent/start":
                     if not config.livekit.enabled:
                         self._send_json(

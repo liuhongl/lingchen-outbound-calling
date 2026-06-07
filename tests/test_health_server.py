@@ -1177,6 +1177,70 @@ def test_livekit_post_call_result_derives_turns_from_web_debug_room():
         thread.join(timeout=3)
 
 
+def test_livekit_post_call_analysis_task_http_lifecycle():
+    config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/post-call-results",
+            data=json.dumps({"call_id": "call-001", "turns": []}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3):
+            pass
+
+        request = Request(
+            f"http://{host}:{port}/livekit/post-call-analysis/claim",
+            data=json.dumps({"call_id": "call-001", "task_type": "summary"}).encode(
+                "utf-8"
+            ),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            claimed = json.loads(response.read().decode("utf-8"))
+
+        request = Request(
+            f"http://{host}:{port}/livekit/post-call-analysis/complete",
+            data=json.dumps(
+                {
+                    "call_id": "call-001",
+                    "task_type": "summary",
+                    "result": {"text": "客户咨询物业费。"},
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            completed = json.loads(response.read().decode("utf-8"))
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/post-call-results/call-001",
+            timeout=3,
+        ) as response:
+            fetched = json.loads(response.read().decode("utf-8"))
+
+        assert claimed["status"] == "claimed"
+        assert claimed["task"]["status"] == "running"
+        assert claimed["task"]["task_type"] == "summary"
+        assert completed["status"] == "completed"
+        assert completed["task"]["status"] == "completed"
+        assert completed["task"]["result"] == {"text": "客户咨询物业费。"}
+        summary_task = fetched["result"]["analysis_tasks"][0]
+        assert summary_task["task_type"] == "summary"
+        assert summary_task["status"] == "completed"
+        assert summary_task["result"] == {"text": "客户咨询物业费。"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
 def test_livekit_web_debug_session_returns_503_when_disabled():
     config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
     server = HealthServer(config)

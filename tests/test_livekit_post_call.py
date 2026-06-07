@@ -66,3 +66,71 @@ def test_create_post_call_result_requires_call_id():
 
     assert err.value.status_code == 400
     assert str(err.value) == "call_id is required"
+
+
+def test_claim_and_complete_analysis_task_updates_result():
+    clock = iter([1000, 2000, 3000])
+    store = LiveKitPostCallResultStore(now_ms=lambda: next(clock))
+    store.create_result({"call_id": "call-001", "turns": []})
+
+    claimed = store.claim_next_analysis_task({"task_type": "summary"})
+
+    assert claimed is not None
+    assert claimed["task"]["task_type"] == "summary"
+    assert claimed["task"]["status"] == "running"
+    assert claimed["task"]["started_at_ms"] == 2000
+
+    completed = store.complete_analysis_task(
+        {
+            "call_id": "call-001",
+            "task_type": "summary",
+            "result": {"text": "客户咨询物业费。"},
+        }
+    )
+
+    assert completed["task"]["status"] == "completed"
+    assert completed["task"]["completed_at_ms"] == 3000
+    assert completed["task"]["result"] == {"text": "客户咨询物业费。"}
+    assert completed["result"]["updated_at_ms"] == 3000
+    assert completed["result"]["analysis_tasks"][0]["status"] == "completed"
+
+
+def test_fail_analysis_task_records_error():
+    clock = iter([1000, 2000])
+    store = LiveKitPostCallResultStore(now_ms=lambda: next(clock))
+    store.create_result({"call_id": "call-001", "turns": []})
+
+    failed = store.fail_analysis_task(
+        {
+            "call_id": "call-001",
+            "task_type": "quality",
+            "error": "provider timeout",
+        }
+    )
+
+    assert failed["task"]["status"] == "failed"
+    assert failed["task"]["failed_at_ms"] == 2000
+    assert failed["task"]["error"] == "provider timeout"
+
+
+def test_claim_next_analysis_task_returns_none_when_empty():
+    store = LiveKitPostCallResultStore()
+
+    assert store.claim_next_analysis_task() is None
+
+
+def test_complete_analysis_task_requires_known_task_type():
+    store = LiveKitPostCallResultStore()
+    store.create_result({"call_id": "call-001", "turns": []})
+
+    with pytest.raises(CallControlError) as err:
+        store.complete_analysis_task(
+            {
+                "call_id": "call-001",
+                "task_type": "unknown",
+                "result": {},
+            }
+        )
+
+    assert err.value.status_code == 400
+    assert str(err.value) == "task_type is invalid"
