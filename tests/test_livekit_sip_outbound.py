@@ -75,6 +75,83 @@ def test_create_outbound_rejects_real_dial_before_sip_is_wired():
     assert manager.list_outbound() == []
 
 
+def test_create_real_outbound_calls_livekit_sip_participant_creator():
+    requests = []
+    manager = LiveKitSipOutboundOrchestrator(
+        room_prefix="sip-prod",
+        livekit_url="wss://livekit.example",
+        api_key_env="TEST_LIVEKIT_API_KEY",
+        api_secret_env="TEST_LIVEKIT_API_SECRET",
+        sip_outbound_real_calls_enabled=True,
+        sip_outbound_trunk_id="ST_abc",
+        sip_outbound_caller_id="037123124845",
+        env={
+            "TEST_LIVEKIT_API_KEY": "key",
+            "TEST_LIVEKIT_API_SECRET": "secret",
+        },
+        id_factory=lambda: "sip-test-1",
+        now_ms=lambda: 1780800000000,
+        sip_participant_creator=lambda request: requests.append(request)
+        or {
+            "participant_identity": "sip-test-1",
+            "sip_call_id": "sip-call-1",
+        },
+    )
+
+    call = manager.create_outbound(
+        {
+            "destination": "18518968743",
+            "business_id": "debt-001",
+            "dry_run": False,
+            "pipeline": "public-cloud",
+        }
+    )
+
+    assert requests == [
+        {
+            "livekit_url": "wss://livekit.example",
+            "api_key": "key",
+            "api_secret": "secret",
+            "room_name": "sip-prod-sip-test-1",
+            "sip_trunk_id": "ST_abc",
+            "sip_number": "037123124845",
+            "sip_call_to": "18518968743",
+            "participant_identity": "sip-test-1",
+            "participant_name": "18518968743",
+            "wait_until_answered": False,
+        }
+    ]
+    assert call["call_id"] == "sip-test-1"
+    assert call["room"] == "sip-prod-sip-test-1"
+    assert call["dry_run"] is False
+    assert call["status"] == "sip_participant_created"
+    assert call["sip_participant"] == {
+        "participant_identity": "sip-test-1",
+        "sip_call_id": "sip-call-1",
+    }
+    assert call["events"] == [
+        {
+            "event": "created",
+            "at_ms": 1780800000000,
+            "status": "created",
+            "dry_run": False,
+        },
+        {
+            "event": "sip_participant_create_requested",
+            "at_ms": 1780800000000,
+            "sip_trunk_id": "ST_abc",
+            "sip_number": "037123124845",
+            "sip_call_to": "18518968743",
+        },
+        {
+            "event": "sip_participant_created",
+            "at_ms": 1780800000000,
+            "status": "sip_participant_created",
+        },
+    ]
+    assert manager.get_outbound("sip-test-1") == call
+
+
 def test_preflight_reports_missing_real_outbound_configuration():
     manager = LiveKitSipOutboundOrchestrator(
         livekit_url="wss://livekit.example",

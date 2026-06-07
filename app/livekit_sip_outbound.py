@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import threading
@@ -45,6 +46,8 @@ class LiveKitSipOutboundOrchestrator:
         env: Mapping[str, str] | None = None,
         id_factory: Callable[[], str] | None = None,
         now_ms: Callable[[], int] | None = None,
+        sip_participant_creator: Callable[[dict[str, Any]], Mapping[str, Any]]
+        | None = None,
     ) -> None:
         self.room_prefix = _slug(room_prefix) or "sip-outbound"
         self.livekit_url = _optional_text(livekit_url) or ""
@@ -56,6 +59,9 @@ class LiveKitSipOutboundOrchestrator:
         self._env = env if env is not None else os.environ
         self._id_factory = id_factory or (lambda: f"sip-{uuid.uuid4().hex[:12]}")
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
+        self._sip_participant_creator = (
+            sip_participant_creator or _create_livekit_sip_participant
+        )
         self._lock = threading.Lock()
         self._calls: dict[str, dict[str, Any]] = {}
 
@@ -116,21 +122,17 @@ class LiveKitSipOutboundOrchestrator:
     def create_outbound(self, payload: dict[str, Any]) -> dict[str, Any]:
         destination = _required_destination(payload.get("destination"))
         dry_run = _payload_bool(payload.get("dry_run"), default=True)
-        if not dry_run:
-            raise CallControlError(
-                "LiveKit SIP real outbound is not wired yet",
-                status_code=501,
-            )
 
         now = self._now_ms()
         call_id = _safe_call_id(self._id_factory())
+        room = f"{self.room_prefix}-{_slug(call_id)}"
         call = {
             "call_id": call_id,
             "business_id": _optional_text(payload.get("business_id")),
             "destination": destination,
-            "room": f"{self.room_prefix}-{_slug(call_id)}",
+            "room": room,
             "status": "created",
-            "dry_run": True,
+            "dry_run": dry_run,
             "pipeline": _optional_text(payload.get("pipeline")) or "public-cloud",
             "voice_id": _optional_text(payload.get("voice_id")),
             "metadata": _metadata(payload.get("metadata")),
@@ -141,10 +143,52 @@ class LiveKitSipOutboundOrchestrator:
                     "event": "created",
                     "at_ms": now,
                     "status": "created",
-                    "dry_run": True,
+                    "dry_run": dry_run,
                 }
             ],
         }
+        if not dry_run:
+            preflight = self.preflight({"destination": destination, "call_id": call_id})
+            if not preflight["ready"]:
+                raise CallControlError(
+                    "LiveKit SIP real outbound is not wired yet",
+                    status_code=501,
+                )
+            request = {
+                "livekit_url": self.livekit_url,
+                "api_key": _optional_text(self._env.get(self.api_key_env)) or "",
+                "api_secret": _optional_text(self._env.get(self.api_secret_env))
+                or "",
+                "room_name": room,
+                "sip_trunk_id": self.sip_outbound_trunk_id,
+                "sip_number": self.sip_outbound_caller_id,
+                "sip_call_to": destination,
+                "participant_identity": call_id,
+                "participant_name": destination,
+                "wait_until_answered": _payload_bool(
+                    payload.get("wait_until_answered"),
+                    default=False,
+                ),
+            }
+            call["events"].append(
+                {
+                    "event": "sip_participant_create_requested",
+                    "at_ms": now,
+                    "sip_trunk_id": self.sip_outbound_trunk_id,
+                    "sip_number": self.sip_outbound_caller_id,
+                    "sip_call_to": destination,
+                }
+            )
+            participant = dict(self._sip_participant_creator(request))
+            call["status"] = "sip_participant_created"
+            call["sip_participant"] = participant
+            call["events"].append(
+                {
+                    "event": "sip_participant_created",
+                    "at_ms": now,
+                    "status": "sip_participant_created",
+                }
+            )
         with self._lock:
             self._calls[call_id] = call
         return deepcopy(call)
@@ -214,3 +258,49 @@ def _slug(value: object) -> str:
     text = re.sub(r"[^a-z0-9]+", "-", text)
     text = re.sub(r"-+", "-", text).strip("-")
     return text[:96]
+
+
+def _create_livekit_sip_participant(request: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from livekit import api
+    except ModuleNotFoundError as err:
+        raise CallControlError(
+            "missing livekit-api package; install livekit-api before real SIP outbound",
+            status_code=503,
+        ) from err
+
+    async def _run() -> Any:
+        livekit_api = api.LiveKitAPI(
+            url=str(request["livekit_url"]),
+            api_key=str(request["api_key"]),
+            api_secret=str(request["api_secret"]),
+        )
+        try:
+            return await livekit_api.sip.create_sip_participant(
+                api.CreateSIPParticipantRequest(
+                    room_name=str(request["room_name"]),
+                    sip_trunk_id=str(request["sip_trunk_id"]),
+                    sip_number=str(request["sip_number"]),
+                    sip_call_to=str(request["sip_call_to"]),
+                    participant_identity=str(request["participant_identity"]),
+                    participant_name=str(request["participant_name"]),
+                    wait_until_answered=bool(request["wait_until_answered"]),
+                )
+            )
+        finally:
+            await livekit_api.aclose()
+
+    return _plain_mapping(asyncio.run(_run()))
+
+
+def _plain_mapping(value: object) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(key): data for key, data in value.items()}
+    try:
+        from google.protobuf.json_format import MessageToDict
+
+        return MessageToDict(value, preserving_proto_field_name=True)
+    except Exception:
+        return {"repr": repr(value)}
