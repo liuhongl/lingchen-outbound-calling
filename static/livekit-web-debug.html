@@ -503,7 +503,7 @@
         for (const [label, start, end] of rows) {
           const row = document.createElement("div");
           row.className = "latency-row";
-          const value = start && end ? `${end - start}ms` : "等待事件";
+          const value = start && end && end >= start ? `${end - start}ms` : "等待事件";
           row.innerHTML = `<strong>${label}</strong><span>${value}</span>`;
           latencySummary.appendChild(row);
         }

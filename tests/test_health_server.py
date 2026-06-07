@@ -744,6 +744,7 @@ def test_livekit_web_debug_page_is_served():
         assert "/livekit/web-debug/agent/start" in body
         assert "/livekit/web-debug/agent/stop" in body
         assert "/livekit/web-debug/agent/status" in body
+        assert "end >= start" in body
     finally:
         server.shutdown()
         thread.join(timeout=3)
