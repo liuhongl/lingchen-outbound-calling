@@ -1094,6 +1094,89 @@ def test_livekit_web_debug_turns_groups_agent_events():
         thread.join(timeout=3)
 
 
+def test_livekit_post_call_result_derives_turns_from_web_debug_room():
+    config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        for event in (
+            {
+                "room": "web-debug-demo",
+                "participant": "browser-user",
+                "event": "asr_final",
+                "provider": "aliyun-nls",
+                "text": "你好，我想咨询物业费。",
+            },
+            {
+                "room": "web-debug-demo",
+                "event": "llm_response_final",
+                "provider": "openai-compatible",
+                "model": "qwen-plus",
+                "text": "您好，请问您想了解哪套房？",
+            },
+        ):
+            request = Request(
+                f"http://{host}:{port}/livekit/web-debug/events",
+                data=json.dumps(event).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=3):
+                pass
+
+        request = Request(
+            f"http://{host}:{port}/livekit/post-call-results",
+            data=json.dumps(
+                {
+                    "call_id": "call-001",
+                    "room": "web-debug-demo",
+                    "source": "web-debug",
+                    "status": "completed",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            created = json.loads(response.read().decode("utf-8"))
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/post-call-results/call-001",
+            timeout=3,
+        ) as response:
+            fetched = json.loads(response.read().decode("utf-8"))
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/post-call-results",
+            timeout=3,
+        ) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+
+        assert response.status == 200
+        assert created["status"] == "accepted"
+        assert created["result"]["call_id"] == "call-001"
+        assert created["result"]["room"] == "web-debug-demo"
+        assert created["result"]["turn_count"] == 1
+        assert created["result"]["turns"][0]["user_text"] == "你好，我想咨询物业费。"
+        assert created["result"]["turns"][0]["assistant_text"] == (
+            "您好，请问您想了解哪套房？"
+        )
+        assert [task["task_type"] for task in created["result"]["analysis_tasks"]] == [
+            "summary",
+            "tags",
+            "quality",
+            "promise_to_pay",
+        ]
+        assert fetched["result"] == created["result"]
+        assert listed["results"] == [created["result"]]
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
 def test_livekit_web_debug_session_returns_503_when_disabled():
     config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
     server = HealthServer(config)

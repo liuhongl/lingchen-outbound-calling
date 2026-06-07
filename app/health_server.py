@@ -27,6 +27,7 @@ from .config import GatewayConfig
 from .livekit_call_turns import build_livekit_turns
 from .livekit_debug_events import LiveKitDebugEventStore
 from .livekit_agent_process import LiveKitAgentProcessManager
+from .livekit_post_call import LiveKitPostCallResultStore
 from .livekit_web_debug import (
     LiveKitWebDebugSessionFactory,
     livekit_web_debug_room_name,
@@ -37,6 +38,7 @@ LOGGER = logging.getLogger(__name__)
 AgentCallRequester = Callable[[dict[str, Any]], dict[str, Any]]
 _DEFAULT_LIVEKIT_AGENT_MANAGER = object()
 _DEFAULT_LIVEKIT_SIP_OUTBOUND_ORCHESTRATOR = object()
+_DEFAULT_LIVEKIT_POST_CALL_RESULT_STORE = object()
 
 DOCS = {
     "handoff": {
@@ -87,6 +89,9 @@ class HealthServer:
         livekit_sip_outbound_orchestrator: Any
         | None
         | object = _DEFAULT_LIVEKIT_SIP_OUTBOUND_ORCHESTRATOR,
+        livekit_post_call_result_store: Any
+        | None
+        | object = _DEFAULT_LIVEKIT_POST_CALL_RESULT_STORE,
     ):
         self.config = config
         self.call_manager = call_manager
@@ -98,6 +103,8 @@ class HealthServer:
             is _DEFAULT_LIVEKIT_SIP_OUTBOUND_ORCHESTRATOR
         ):
             livekit_sip_outbound_orchestrator = LiveKitSipOutboundOrchestrator()
+        if livekit_post_call_result_store is _DEFAULT_LIVEKIT_POST_CALL_RESULT_STORE:
+            livekit_post_call_result_store = LiveKitPostCallResultStore()
         handler = self._make_handler(
             config,
             call_manager=call_manager,
@@ -105,6 +112,7 @@ class HealthServer:
             webrtc_agent_call_requester=webrtc_agent_call_requester,
             livekit_agent_manager=livekit_agent_manager,
             livekit_sip_outbound_orchestrator=livekit_sip_outbound_orchestrator,
+            livekit_post_call_result_store=livekit_post_call_result_store,
         )
         self._server = ThreadingHTTPServer(
             (config.server.host, config.server.port),
@@ -134,6 +142,7 @@ class HealthServer:
         webrtc_agent_call_requester: AgentCallRequester | None = None,
         livekit_agent_manager: Any | None = None,
         livekit_sip_outbound_orchestrator: Any | None = None,
+        livekit_post_call_result_store: Any | None = None,
     ) -> type[BaseHTTPRequestHandler]:
         agent_call_requester = webrtc_agent_call_requester or (
             lambda payload: originate_webrtc_agent_test_call(config, payload)
@@ -246,6 +255,52 @@ class HealthServer:
                                 )
                             ),
                         },
+                    )
+                    return
+
+                if parsed.path == "/livekit/post-call-results":
+                    if livekit_post_call_result_store is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit post-call result store disabled",
+                            },
+                        )
+                        return
+                    limit = _query_int(parsed.query, "limit", default=50)
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "status": "ok",
+                            "results": livekit_post_call_result_store.list_results(
+                                limit=limit
+                            ),
+                        },
+                    )
+                    return
+
+                post_call_id = _livekit_post_call_result_id_from_path(parsed.path)
+                if post_call_id is not None:
+                    if livekit_post_call_result_store is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit post-call result store disabled",
+                            },
+                        )
+                        return
+                    result = livekit_post_call_result_store.get_result(post_call_id)
+                    if result is None:
+                        self._send_json(
+                            HTTPStatus.NOT_FOUND,
+                            {"status": "not_found", "call_id": post_call_id},
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"status": "ok", "result": result},
                     )
                     return
 
@@ -613,6 +668,41 @@ class HealthServer:
                     self._send_json(
                         HTTPStatus.ACCEPTED,
                         {"status": "accepted", "outbound": outbound},
+                    )
+                    return
+
+                if parsed.path == "/livekit/post-call-results":
+                    if livekit_post_call_result_store is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit post-call result store disabled",
+                            },
+                        )
+                        return
+                    try:
+                        payload = self._read_json_body()
+                        payload = _with_derived_livekit_turns(
+                            payload,
+                            livekit_debug_events,
+                        )
+                        result = livekit_post_call_result_store.create_result(payload)
+                    except CallControlError as err:
+                        self._send_json(
+                            HTTPStatus(err.status_code),
+                            {"status": "error", "error": str(err)},
+                        )
+                        return
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {"status": "accepted", "result": result},
                     )
                     return
 
@@ -1053,6 +1143,29 @@ def _livekit_sip_outbound_call_id_from_path(path: str) -> str | None:
     if not call_id or "/" in call_id:
         return None
     return call_id
+
+
+def _livekit_post_call_result_id_from_path(path: str) -> str | None:
+    prefix = "/livekit/post-call-results/"
+    if not path.startswith(prefix):
+        return None
+    call_id = path[len(prefix) :].strip("/")
+    if not call_id or "/" in call_id:
+        return None
+    return call_id
+
+
+def _with_derived_livekit_turns(
+    payload: dict[str, Any],
+    event_store: LiveKitDebugEventStore,
+) -> dict[str, Any]:
+    if isinstance(payload.get("turns"), list):
+        return payload
+    room = _payload_text(payload.get("room"))
+    if not room:
+        return payload
+    events = event_store.list_events(room=room, limit=500)
+    return {**payload, "turns": build_livekit_turns(events)}
 
 
 def _query_str(query: str, name: str) -> str | None:
