@@ -8,6 +8,7 @@ import os
 import struct
 from collections.abc import Callable
 from typing import Any
+from urllib import request
 
 from .config import LiveKitConfig, load_config
 from .env_loader import load_env_file
@@ -209,6 +210,7 @@ def main() -> int:
         default="none",
     )
     parser.add_argument("--publish-mock-tts-audio", action="store_true")
+    parser.add_argument("--event-sink-url", default="")
     parser.add_argument(
         "--pipeline",
         choices=("none", "mock", "public-cloud"),
@@ -242,6 +244,7 @@ def main() -> int:
             dialog_provider=str(pipeline_settings["dialog_provider"]),
             tts_provider=str(pipeline_settings["tts_provider"]),
             publish_mock_tts_audio=bool(pipeline_settings["publish_mock_tts_audio"]),
+            on_event=_build_event_writer(args.event_sink_url, base_writer=_print_event),
         )
     )
     return 0
@@ -610,6 +613,54 @@ def _print_event(event: dict[str, object]) -> None:
     if event.get("event") == "audio_frame":
         return
     print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
+def _build_event_writer(
+    event_sink_url: str,
+    *,
+    base_writer: AgentEventWriter,
+    post_event: Callable[[str, dict[str, object]], object] | None = None,
+) -> AgentEventWriter:
+    sink_url = event_sink_url.strip()
+    if not sink_url:
+        return base_writer
+    post = post_event or _post_event_sink_event
+
+    def write(event: dict[str, object]) -> None:
+        base_writer(event)
+        sink_event = _event_sink_payload(event)
+        if sink_event is None:
+            return
+        try:
+            post(sink_url, sink_event)
+        except Exception as err:  # pragma: no cover - defensive around local tooling
+            base_writer(
+                {
+                    "event": "event_sink_error",
+                    "event_sink_url": sink_url,
+                    "error": str(err),
+                }
+            )
+
+    return write
+
+
+def _event_sink_payload(event: dict[str, object]) -> dict[str, object] | None:
+    if event.get("event") == "audio_frame":
+        return None
+    return _public_event(event)
+
+
+def _post_event_sink_event(url: str, event: dict[str, object]) -> None:
+    body = json.dumps(event, ensure_ascii=False).encode("utf-8")
+    req = request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=2) as response:
+        response.read()
 
 
 if __name__ == "__main__":

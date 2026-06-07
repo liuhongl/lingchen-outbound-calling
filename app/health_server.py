@@ -24,6 +24,7 @@ from .call_control import (
     originate_webrtc_agent_test_call,
 )
 from .config import GatewayConfig
+from .livekit_debug_events import LiveKitDebugEventStore
 from .livekit_web_debug import LiveKitWebDebugSessionFactory
 
 LOGGER = logging.getLogger(__name__)
@@ -114,6 +115,7 @@ class HealthServer:
         agent_call_requester = webrtc_agent_call_requester or (
             lambda payload: originate_webrtc_agent_test_call(config, payload)
         )
+        livekit_debug_events = LiveKitDebugEventStore()
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "SipRealtimeVoiceGateway/0.1"
@@ -189,6 +191,29 @@ class HealthServer:
 
                 if parsed.path == "/livekit-web-debug":
                     self._send_html(HTTPStatus.OK, _load_livekit_web_debug_html())
+                    return
+
+                if parsed.path == "/livekit/web-debug/events":
+                    room = _query_str(parsed.query, "room")
+                    after = _query_non_negative_int(
+                        parsed.query,
+                        "after",
+                        default=0,
+                    )
+                    events = livekit_debug_events.list_events(
+                        room=room,
+                        after=after,
+                    )
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "status": "ok",
+                            "events": events,
+                            "nextSequence": (
+                                max((int(event["sequence"]) for event in events), default=after)
+                            ),
+                        },
+                    )
                     return
 
                 if parsed.path == "/vendor/jssip.min.js":
@@ -404,6 +429,21 @@ class HealthServer:
                     self._send_json(
                         HTTPStatus.CREATED,
                         {"status": "ok", **session},
+                    )
+                    return
+
+                if parsed.path == "/livekit/web-debug/events":
+                    try:
+                        event = livekit_debug_events.append(self._read_json_body())
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {"status": "accepted", "event": event},
                     )
                     return
 
@@ -824,6 +864,16 @@ def _query_int(query: str, name: str, *, default: int) -> int:
         return default
     try:
         return max(1, min(int(values[0]), 500))
+    except ValueError:
+        return default
+
+
+def _query_non_negative_int(query: str, name: str, *, default: int) -> int:
+    values = parse_qs(query).get(name)
+    if not values:
+        return default
+    try:
+        return max(0, int(values[0]))
     except ValueError:
         return default
 

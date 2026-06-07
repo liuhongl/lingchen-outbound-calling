@@ -733,6 +733,102 @@ def test_livekit_web_debug_page_is_served():
         assert "RoomEvent.TrackSubscribed" in body
         assert "trackSubscribed" in body
         assert "remote_audio_track_subscribed" in body
+        assert 'id="agentEvents"' in body
+        assert 'id="latencySummary"' in body
+        assert "/livekit/web-debug/events" in body
+        assert "pollAgentEvents" in body
+        assert "renderLatencySummary" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_web_debug_events_accepts_and_lists_agent_events():
+    config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/web-debug/events",
+            data=json.dumps(
+                {
+                    "room": "web-debug-demo",
+                    "identity": "agent-worker",
+                    "participant": "browser-user",
+                    "event": "asr_final",
+                    "text": "你好，我想咨询一下物业费。",
+                    "_audio_pcm": "must-not-leak",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            accepted = json.loads(response.read().decode("utf-8"))
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/web-debug/events?room=web-debug-demo",
+            timeout=3,
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        assert accepted["status"] == "accepted"
+        assert accepted["event"]["sequence"] == 1
+        assert response.status == 200
+        assert payload["status"] == "ok"
+        assert payload["events"] == [
+            {
+                "sequence": 1,
+                "receivedAtMs": accepted["event"]["receivedAtMs"],
+                "room": "web-debug-demo",
+                "identity": "agent-worker",
+                "participant": "browser-user",
+                "event": "asr_final",
+                "text": "你好，我想咨询一下物业费。",
+            }
+        ]
+        assert "_audio_pcm" not in json.dumps(payload)
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_web_debug_events_supports_after_cursor():
+    config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        for event_name in ("asr_final", "llm_response_final"):
+            request = Request(
+                f"http://{host}:{port}/livekit/web-debug/events",
+                data=json.dumps(
+                    {
+                        "room": "web-debug-demo",
+                        "event": event_name,
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=3):
+                pass
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/web-debug/events?room=web-debug-demo&after=1",
+            timeout=3,
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        assert [event["event"] for event in payload["events"]] == [
+            "llm_response_final"
+        ]
+        assert payload["nextSequence"] == 2
     finally:
         server.shutdown()
         thread.join(timeout=3)

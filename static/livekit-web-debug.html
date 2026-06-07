@@ -231,6 +231,44 @@
         width: 100%;
       }
 
+      .event-list,
+      .latency-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .agent-event,
+      .latency-row {
+        display: grid;
+        gap: 4px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        background: var(--panel);
+      }
+
+      .agent-event strong,
+      .latency-row strong {
+        font-size: 13px;
+      }
+
+      .agent-event span,
+      .latency-row span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .agent-event.asr_final strong,
+      .agent-event.llm_response_final strong,
+      .agent-event.tts_audio_publish_finished strong {
+        color: var(--green);
+      }
+
+      .agent-event.asr_error strong,
+      .agent-event.event_sink_error strong {
+        color: var(--red);
+      }
+
       pre {
         max-height: 280px;
         overflow: auto;
@@ -308,6 +346,10 @@
           <div class="remote-audio" id="remoteAudioTracks"></div>
           <h2>Remote Track Events</h2>
           <pre id="remoteTrackEvents">[]</pre>
+          <h2>Agent Events</h2>
+          <div class="event-list" id="agentEvents"></div>
+          <h2>Latency</h2>
+          <div class="latency-list" id="latencySummary"></div>
           <h2>Session</h2>
           <pre id="sessionOutput">{}</pre>
         </section>
@@ -321,6 +363,8 @@
       const participants = document.getElementById("participants");
       const remoteAudioTracks = document.getElementById("remoteAudioTracks");
       const remoteTrackEvents = document.getElementById("remoteTrackEvents");
+      const agentEventsBox = document.getElementById("agentEvents");
+      const latencySummary = document.getElementById("latencySummary");
       const leaveButton = document.getElementById("leaveButton");
       const micValue = document.getElementById("micValue");
       const micMeterFill = document.getElementById("micMeterFill");
@@ -328,6 +372,10 @@
       let room = null;
       let remoteAudioElements = new Map();
       let trackEvents = [];
+      let agentEvents = [];
+      let agentEventCursor = 0;
+      let agentEventPollTimer = 0;
+      let activeAgentEventRoom = "";
       let micMonitor = null;
 
       function setStatus(text, kind = "") {
@@ -374,6 +422,121 @@
 
       function renderTrackEvents() {
         remoteTrackEvents.textContent = JSON.stringify(trackEvents.slice(-30), null, 2);
+      }
+
+      function renderAgentEvents() {
+        agentEventsBox.innerHTML = "";
+        if (!agentEvents.length) {
+          const empty = document.createElement("div");
+          empty.className = "agent-event";
+          empty.innerHTML = "<strong>等待 Agent 事件</strong><span>启动 Agent 时传入 --event-sink-url 后显示</span>";
+          agentEventsBox.appendChild(empty);
+          renderLatencySummary();
+          return;
+        }
+        for (const event of agentEvents.slice(-30).reverse()) {
+          const row = document.createElement("div");
+          row.className = `agent-event ${eventClassName(event.event)}`;
+          row.innerHTML = `
+            <strong>${escapeHtml(event.event || "event")}</strong>
+            <span>${escapeHtml(agentEventSummary(event))}</span>
+          `;
+          agentEventsBox.appendChild(row);
+        }
+        renderLatencySummary();
+      }
+
+      function agentEventSummary(event) {
+        const parts = [];
+        if (event.text) parts.push(event.text);
+        if (event.input_text) parts.push(`input=${event.input_text}`);
+        if (event.provider) parts.push(`provider=${event.provider}`);
+        if (event.model) parts.push(`model=${event.model}`);
+        if (event.audio_duration_ms) parts.push(`audio=${event.audio_duration_ms}ms`);
+        if (event.error) parts.push(`error=${event.error}`);
+        if (event.receivedAtMs) parts.push(new Date(event.receivedAtMs).toLocaleTimeString());
+        return parts.join(" · ") || JSON.stringify(event);
+      }
+
+      function eventClassName(value) {
+        return String(value || "").replaceAll(/[^a-zA-Z0-9_-]/g, "_");
+      }
+
+      function renderLatencySummary() {
+        latencySummary.innerHTML = "";
+        const latest = latestAgentStageTimes();
+        const rows = [
+          ["ASR → LLM", latest.asr_final, latest.llm_response_started],
+          ["LLM 生成", latest.llm_response_started, latest.llm_response_final],
+          ["LLM → TTS", latest.llm_response_final, latest.tts_started],
+          ["TTS 合成", latest.tts_started, latest.tts_final],
+          ["TTS 发布", latest.tts_final, latest.tts_audio_publish_finished],
+        ];
+        for (const [label, start, end] of rows) {
+          const row = document.createElement("div");
+          row.className = "latency-row";
+          const value = start && end ? `${end - start}ms` : "等待事件";
+          row.innerHTML = `<strong>${label}</strong><span>${value}</span>`;
+          latencySummary.appendChild(row);
+        }
+      }
+
+      function latestAgentStageTimes() {
+        const stages = {};
+        for (const event of agentEvents) {
+          if (!event.event || !event.receivedAtMs) continue;
+          stages[event.event] = event.receivedAtMs;
+        }
+        return stages;
+      }
+
+      function resetAgentEvents() {
+        stopAgentEventPolling();
+        agentEvents = [];
+        agentEventCursor = 0;
+        activeAgentEventRoom = "";
+        renderAgentEvents();
+      }
+
+      function startAgentEventPolling(roomName) {
+        stopAgentEventPolling();
+        activeAgentEventRoom = roomName;
+        agentEvents = [];
+        agentEventCursor = 0;
+        renderAgentEvents();
+        pollAgentEvents();
+        agentEventPollTimer = window.setInterval(pollAgentEvents, 1000);
+      }
+
+      function stopAgentEventPolling() {
+        if (!agentEventPollTimer) return;
+        window.clearInterval(agentEventPollTimer);
+        agentEventPollTimer = 0;
+      }
+
+      async function pollAgentEvents() {
+        if (!activeAgentEventRoom) return;
+        try {
+          const url = apiUrl(
+            `/livekit/web-debug/events?room=${encodeURIComponent(activeAgentEventRoom)}&after=${agentEventCursor}`
+          );
+          const response = await fetch(url);
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "agent events fetch failed");
+          if (!Array.isArray(payload.events) || !payload.events.length) return;
+          agentEvents.push(...payload.events);
+          agentEvents = agentEvents.slice(-100);
+          agentEventCursor = payload.nextSequence || agentEvents.at(-1).sequence || agentEventCursor;
+          renderAgentEvents();
+        } catch (error) {
+          const fallback = {
+            event: "agent_events_error",
+            error: errorMessage(error),
+            receivedAtMs: Date.now(),
+          };
+          agentEvents.push(fallback);
+          renderAgentEvents();
+        }
       }
 
       function appendTrackEvent(event) {
@@ -559,6 +722,7 @@
           );
           if (!response.ok) throw new Error(session.error || "session create failed");
           if (!window.LivekitClient) throw new Error("LiveKit browser SDK 未加载");
+          startAgentEventPolling(session.room);
 
           room = new LivekitClient.Room();
           room.on(LivekitClient.RoomEvent.ParticipantConnected, renderParticipants);
@@ -594,6 +758,7 @@
 
       async function leaveRoom() {
         stopMicrophoneMonitor();
+        resetAgentEvents();
         if (room) {
           room.disconnect();
           room = null;
@@ -610,6 +775,7 @@
 
       loadLiveKitStatus();
       renderTrackEvents();
+      renderAgentEvents();
     </script>
   </body>
 </html>

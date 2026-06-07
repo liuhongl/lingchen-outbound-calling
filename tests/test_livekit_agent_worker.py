@@ -9,6 +9,7 @@ from app.config import LiveKitConfig
 from app.livekit_agent_worker import (
     _accept_asr_frame,
     _audio_frame_summary,
+    _build_event_writer,
     _build_dialogue_policy,
     _build_pipeline_settings,
     _build_streaming_asr_adapter,
@@ -723,6 +724,73 @@ def test_print_event_skips_audio_frame_by_default(capsys):
     _print_event({"event": "asr_final", "text": "你好"})
 
     assert capsys.readouterr().out == '{"event": "asr_final", "text": "你好"}\n'
+
+
+def test_event_writer_posts_observable_events_without_private_fields():
+    printed: list[dict[str, object]] = []
+    posted: list[tuple[str, dict[str, object]]] = []
+    writer = _build_event_writer(
+        "http://127.0.0.1:9100/livekit/web-debug/events",
+        base_writer=printed.append,
+        post_event=lambda url, event: posted.append((url, event)),
+    )
+
+    writer({"event": "audio_frame", "frame_index": 1})
+    writer(
+        {
+            "event": "tts_final",
+            "room": "web-debug-demo",
+            "text": "您好",
+            "audio_byte_count": 123,
+            "_audio_pcm": b"raw-audio",
+        }
+    )
+
+    assert printed == [
+        {"event": "audio_frame", "frame_index": 1},
+        {
+            "event": "tts_final",
+            "room": "web-debug-demo",
+            "text": "您好",
+            "audio_byte_count": 123,
+            "_audio_pcm": b"raw-audio",
+        },
+    ]
+    assert posted == [
+        (
+            "http://127.0.0.1:9100/livekit/web-debug/events",
+            {
+                "event": "tts_final",
+                "room": "web-debug-demo",
+                "text": "您好",
+                "audio_byte_count": 123,
+            },
+        )
+    ]
+
+
+def test_event_writer_reports_sink_errors_to_base_writer():
+    printed: list[dict[str, object]] = []
+
+    def failing_post(url, event):
+        raise RuntimeError("sink down")
+
+    writer = _build_event_writer(
+        "http://127.0.0.1:9100/livekit/web-debug/events",
+        base_writer=printed.append,
+        post_event=failing_post,
+    )
+
+    writer({"event": "asr_final", "room": "web-debug-demo", "text": "你好"})
+
+    assert printed == [
+        {"event": "asr_final", "room": "web-debug-demo", "text": "你好"},
+        {
+            "event": "event_sink_error",
+            "event_sink_url": "http://127.0.0.1:9100/livekit/web-debug/events",
+            "error": "sink down",
+        },
+    ]
 
 
 class FakeRtcModule:
