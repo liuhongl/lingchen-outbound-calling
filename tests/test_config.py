@@ -147,7 +147,7 @@ def test_load_config_from_toml(tmp_path):
             web_debug_token_ttl_seconds = 900
             sip_outbound_real_calls_enabled = true
             sip_outbound_trunk_id = "trunk_abc"
-            sip_outbound_caller_id = "+861055500000"
+            sip_outbound_caller_id = "037123124845"
             sip_outbound_room_prefix = "sip-prod"
             """
         ),
@@ -241,7 +241,7 @@ def test_load_config_from_toml(tmp_path):
     assert config.livekit.web_debug_token_ttl_seconds == 900
     assert config.livekit.sip_outbound_real_calls_enabled is True
     assert config.livekit.sip_outbound_trunk_id == "trunk_abc"
-    assert config.livekit.sip_outbound_caller_id == "+861055500000"
+    assert config.livekit.sip_outbound_caller_id == "037123124845"
     assert config.livekit.sip_outbound_room_prefix == "sip-prod"
 
 
@@ -324,7 +324,7 @@ def test_environment_overrides(monkeypatch):
     monkeypatch.setenv("LIVEKIT_WEB_DEBUG_TOKEN_TTL_SECONDS", "1200")
     monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_REAL_CALLS_ENABLED", "true")
     monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "env-trunk")
-    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_CALLER_ID", "+861055599999")
+    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_CALLER_ID", "037123124845")
     monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_ROOM_PREFIX", "env-sip")
 
     config = load_config()
@@ -404,7 +404,7 @@ def test_environment_overrides(monkeypatch):
     assert config.livekit.web_debug_token_ttl_seconds == 1200
     assert config.livekit.sip_outbound_real_calls_enabled is True
     assert config.livekit.sip_outbound_trunk_id == "env-trunk"
-    assert config.livekit.sip_outbound_caller_id == "+861055599999"
+    assert config.livekit.sip_outbound_caller_id == "037123124845"
     assert config.livekit.sip_outbound_room_prefix == "env-sip"
 
 

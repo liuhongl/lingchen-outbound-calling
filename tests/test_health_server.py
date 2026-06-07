@@ -863,7 +863,7 @@ def test_livekit_sip_outbound_dry_run_create_get_and_list():
             f"http://{host}:{port}/livekit/sip/outbound",
             data=json.dumps(
                 {
-                    "destination": "+8613800138000",
+                    "destination": "18518968743",
                     "business_id": "debt-001",
                     "dry_run": True,
                 }
@@ -897,7 +897,7 @@ def test_livekit_sip_outbound_dry_run_create_get_and_list():
         assert listed["outbounds"] == [created["outbound"]]
         assert manager.created_payloads == [
             {
-                "destination": "+8613800138000",
+                "destination": "18518968743",
                 "business_id": "debt-001",
                 "dry_run": True,
             }
@@ -921,7 +921,7 @@ def test_livekit_sip_outbound_preflight_returns_readiness_without_dialing():
         host, port = server.address
         request = Request(
             f"http://{host}:{port}/livekit/sip/outbound/preflight",
-            data=json.dumps({"destination": "+8613800138000"}).encode("utf-8"),
+            data=json.dumps({"destination": "18518968743"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -936,7 +936,7 @@ def test_livekit_sip_outbound_preflight_returns_readiness_without_dialing():
                 "missing": ["livekit.sip_outbound_trunk_id"],
             },
         }
-        assert manager.preflight_payloads == [{"destination": "+8613800138000"}]
+        assert manager.preflight_payloads == [{"destination": "18518968743"}]
         assert manager.created_payloads == []
     finally:
         server.shutdown()
@@ -958,7 +958,7 @@ def test_livekit_sip_outbound_real_dial_returns_501_until_wired():
             f"http://{host}:{port}/livekit/sip/outbound",
             data=json.dumps(
                 {
-                    "destination": "+8613800138000",
+                    "destination": "18518968743",
                     "dry_run": False,
                 }
             ).encode("utf-8"),

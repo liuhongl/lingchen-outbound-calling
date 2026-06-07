@@ -132,6 +132,8 @@ api_secret_env = "LIVEKIT_API_SECRET"
 web_debug_room_prefix = "web-debug"
 web_debug_token_ttl_seconds = 1800
 sip_outbound_real_calls_enabled = false
+# LiveKit 创建 outbound trunk 后生成的 trunk id，不是 SIP proxy 地址。
 sip_outbound_trunk_id = ""
-sip_outbound_caller_id = ""
+# 当前服务商允许的主叫显号是 037123124845；被叫号码使用 18518968743 这类国内原始手机号，不加 +86 / 86 / 0 / 9。
+sip_outbound_caller_id = "037123124845"
 sip_outbound_room_prefix = "sip-outbound"

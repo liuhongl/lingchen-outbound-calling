@@ -11,8 +11,13 @@ from typing import Any
 
 from .call_control import CallControlError
 
-_SAFE_DESTINATION_RE = re.compile(r"^\+?[0-9][0-9\-]{1,31}$")
+_RAW_DOMESTIC_MOBILE_RE = re.compile(r"^1[3-9][0-9]{9}$")
 _SAFE_TOKEN_RE = re.compile(r"^[a-zA-Z0-9_.:-]{1,128}$")
+_CURRENT_PROVIDER_CALLER_ID = "037123124845"
+_RAW_DOMESTIC_MOBILE_HINT = (
+    "current SIP provider requires raw domestic mobile numbers, "
+    "for example 18518968743; do not add +86, 86, 0, or 9 prefix"
+)
 
 
 class LiveKitSipOutboundOrchestrator:
@@ -48,9 +53,10 @@ class LiveKitSipOutboundOrchestrator:
         destination = _optional_text(payload.get("destination"))
         destination_valid = destination is None
         if destination is not None:
-            destination_valid = bool(_SAFE_DESTINATION_RE.match(destination))
+            destination_valid = bool(_RAW_DOMESTIC_MOBILE_RE.match(destination))
 
         missing: list[str] = []
+        invalid: list[str] = []
         if not self.livekit_url:
             missing.append("livekit.url")
         if not _optional_text(self._env.get(self.api_key_env)):
@@ -65,15 +71,22 @@ class LiveKitSipOutboundOrchestrator:
             missing.append("livekit.sip_outbound_real_calls_enabled")
         if destination is not None and not destination_valid:
             missing.append("destination")
+        if (
+            self.sip_outbound_caller_id
+            and self.sip_outbound_caller_id != _CURRENT_PROVIDER_CALLER_ID
+        ):
+            invalid.append("livekit.sip_outbound_caller_id")
 
         warnings: list[str] = []
-        if destination is not None and not destination.startswith("+"):
+        if destination is not None and not destination_valid:
+            warnings.append(_RAW_DOMESTIC_MOBILE_HINT)
+        if "livekit.sip_outbound_caller_id" in invalid:
             warnings.append(
-                "destination should use E.164 format, for example +8613800138000"
+                f"current SIP provider caller_id must be {_CURRENT_PROVIDER_CALLER_ID}"
             )
 
         return {
-            "ready": not missing,
+            "ready": not missing and not invalid,
             "real_call_enabled": self.sip_outbound_real_calls_enabled,
             "destination": destination,
             "destination_valid": destination_valid,
@@ -84,6 +97,7 @@ class LiveKitSipOutboundOrchestrator:
             "trunk_id": self.sip_outbound_trunk_id,
             "caller_id": self.sip_outbound_caller_id,
             "missing": missing,
+            "invalid": invalid,
             "warnings": warnings,
         }
 
@@ -143,8 +157,11 @@ def _required_destination(value: object) -> str:
     destination = str(value or "").strip()
     if not destination:
         raise CallControlError("destination is required", status_code=400)
-    if not _SAFE_DESTINATION_RE.match(destination):
-        raise CallControlError("destination is invalid", status_code=400)
+    if not _RAW_DOMESTIC_MOBILE_RE.match(destination):
+        raise CallControlError(
+            "destination must be a raw 11-digit domestic mobile number",
+            status_code=400,
+        )
     return destination
 
 
