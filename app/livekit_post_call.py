@@ -25,15 +25,17 @@ class LiveKitPostCallResultStore:
 
     def create_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         call_id = _required_call_id(payload.get("call_id"))
-        turns = _turns(payload.get("turns"))
+        source_turns = _turns(payload.get("turns"))
+        turns, debug_turns = _normalize_turns(source_turns)
         now = self._now_ms()
         result = {
             "call_id": call_id,
             "room": _optional_text(payload.get("room")),
             "source": _optional_text(payload.get("source")) or "livekit",
             "status": _optional_text(payload.get("status")) or "completed",
-            "turn_count": len(turns),
+            "turn_count": len(source_turns),
             "turns": turns,
+            "debug_turns": debug_turns,
             "analysis_tasks": [
                 _analysis_task(call_id, task_type, now)
                 for task_type in DEFAULT_ANALYSIS_TASK_TYPES
@@ -198,6 +200,29 @@ def _turns(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [deepcopy(turn) for turn in value if isinstance(turn, dict)]
+
+
+def _normalize_turns(
+    source_turns: list[dict[str, Any]],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    turns: list[dict[str, str]] = []
+    debug_turns: list[dict[str, Any]] = []
+    for source_turn in source_turns:
+        role = _optional_text(source_turn.get("role"))
+        text = _optional_text(source_turn.get("text"))
+        if role in {"assistant", "user"} and text:
+            turns.append({"role": role, "text": text})
+            continue
+
+        user_text = _optional_text(source_turn.get("user_text"))
+        assistant_text = _optional_text(source_turn.get("assistant_text"))
+        if user_text or assistant_text:
+            debug_turns.append(deepcopy(source_turn))
+        if user_text:
+            turns.append({"role": "user", "text": user_text})
+        if assistant_text:
+            turns.append({"role": "assistant", "text": assistant_text})
+    return turns, debug_turns
 
 
 def _metadata(value: object) -> dict[str, Any]:

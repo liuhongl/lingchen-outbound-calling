@@ -31,6 +31,17 @@ def test_create_post_call_result_builds_queued_analysis_tasks():
     assert result["source"] == "livekit-sip"
     assert result["status"] == "completed"
     assert result["turn_count"] == 1
+    assert result["turns"] == [
+        {"role": "user", "text": "你好，我想咨询物业费。"},
+        {"role": "assistant", "text": "您好，请问您想了解哪套房？"},
+    ]
+    assert result["debug_turns"] == [
+        {
+            "turn_index": 1,
+            "user_text": "你好，我想咨询物业费。",
+            "assistant_text": "您好，请问您想了解哪套房？",
+        }
+    ]
     assert result["created_at_ms"] == 1780801000000
     assert result["updated_at_ms"] == 1780801000000
     assert result["metadata"] == {"tenant_id": "tenant-a"}
@@ -42,6 +53,27 @@ def test_create_post_call_result_builds_queued_analysis_tasks():
     ]
     assert {task["status"] for task in result["analysis_tasks"]} == {"queued"}
     assert all(task["call_id"] == "call-001" for task in result["analysis_tasks"])
+
+
+def test_create_post_call_result_preserves_existing_business_turns_shape():
+    store = LiveKitPostCallResultStore(now_ms=lambda: 1780801000000)
+
+    result = store.create_result(
+        {
+            "call_id": "call-001",
+            "turns": [
+                {"role": "assistant", "text": "您好。"},
+                {"role": "user", "text": "我想问物业费。"},
+            ],
+        }
+    )
+
+    assert result["turn_count"] == 2
+    assert result["turns"] == [
+        {"role": "assistant", "text": "您好。"},
+        {"role": "user", "text": "我想问物业费。"},
+    ]
+    assert result["debug_turns"] == []
 
 
 def test_list_and_get_post_call_results_are_newest_first():

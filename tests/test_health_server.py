@@ -1160,8 +1160,14 @@ def test_livekit_post_call_result_derives_turns_from_web_debug_room():
         assert created["result"]["call_id"] == "call-001"
         assert created["result"]["room"] == "web-debug-demo"
         assert created["result"]["turn_count"] == 1
-        assert created["result"]["turns"][0]["user_text"] == "你好，我想咨询物业费。"
-        assert created["result"]["turns"][0]["assistant_text"] == (
+        assert created["result"]["turns"] == [
+            {"role": "user", "text": "你好，我想咨询物业费。"},
+            {"role": "assistant", "text": "您好，请问您想了解哪套房？"},
+        ]
+        assert created["result"]["debug_turns"][0]["user_text"] == (
+            "你好，我想咨询物业费。"
+        )
+        assert created["result"]["debug_turns"][0]["assistant_text"] == (
             "您好，请问您想了解哪套房？"
         )
         assert [task["task_type"] for task in created["result"]["analysis_tasks"]] == [
