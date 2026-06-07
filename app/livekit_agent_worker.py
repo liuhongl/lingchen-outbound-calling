@@ -59,6 +59,7 @@ async def run_livekit_agent_once(
     room = rtc.Room()
     writer = on_event or _print_event
     audio_tasks: set[asyncio.Task[None]] = set()
+    active_audio_participants: set[str] = set()
 
     room.on(
         "participant_connected",
@@ -86,22 +87,36 @@ async def run_livekit_agent_once(
     def on_track_subscribed(track, publication, participant) -> None:
         if getattr(track, "kind", None) != rtc.TrackKind.KIND_AUDIO:
             return
+        participant_identity = str(participant.identity)
+        if participant_identity in active_audio_participants:
+            writer(
+                {
+                    "event": "audio_track_ignored",
+                    "room": session["room"],
+                    "identity": session["identity"],
+                    "participant": participant_identity,
+                    "reason": "duplicate_participant_audio",
+                }
+            )
+            return
+        active_audio_participants.add(participant_identity)
         writer(
             {
                 "event": "audio_track_subscribed",
                 "room": session["room"],
                 "identity": session["identity"],
-                "participant": participant.identity,
+                "participant": participant_identity,
             }
         )
         if audio_frame_limit <= 0:
+            active_audio_participants.discard(participant_identity)
             return
         task = asyncio.create_task(
             _consume_audio_stream(
                 rtc,
                 room,
                 track,
-                participant_identity=participant.identity,
+                participant_identity=participant_identity,
                 room_name=str(session["room"]),
                 identity=str(session["identity"]),
                 writer=writer,
@@ -115,6 +130,12 @@ async def run_livekit_agent_once(
                 dialogue_policy=_build_dialogue_policy(dialog_provider),
                 tts_synthesizer=_build_tts_synthesizer(tts_provider),
                 publish_mock_tts_audio=publish_mock_tts_audio,
+            )
+        )
+        task.add_done_callback(
+            lambda completed_task, identity=participant_identity: (
+                audio_tasks.discard(completed_task),
+                active_audio_participants.discard(identity),
             )
         )
         audio_tasks.add(task)
@@ -586,6 +607,8 @@ def _build_mock_tts_audio_frame(
 
 
 def _print_event(event: dict[str, object]) -> None:
+    if event.get("event") == "audio_frame":
+        return
     print(json.dumps(event, ensure_ascii=False), flush=True)
 
 

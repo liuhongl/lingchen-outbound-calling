@@ -13,6 +13,7 @@ from app.livekit_agent_worker import (
     _build_pipeline_settings,
     _build_streaming_asr_adapter,
     _build_tts_synthesizer,
+    _print_event,
     _write_asr_events,
     run_livekit_agent_once,
 )
@@ -115,6 +116,55 @@ def test_run_livekit_agent_once_reports_audio_frames(monkeypatch):
         "samples_per_channel": 4,
         "rms": 1000,
         "peak": 1000,
+    }
+
+
+def test_run_livekit_agent_once_ignores_duplicate_audio_tracks_for_participant(
+    monkeypatch,
+):
+    monkeypatch.setenv("TEST_LIVEKIT_API_KEY", "api-key")
+    monkeypatch.setenv("TEST_LIVEKIT_API_SECRET", "secret")
+    rtc = FakeRtcModule()
+    rtc.tracks_to_subscribe = [
+        FakeTrack(kind=rtc.TrackKind.KIND_AUDIO),
+        FakeTrack(kind=rtc.TrackKind.KIND_AUDIO),
+    ]
+    events: list[dict[str, object]] = []
+
+    asyncio.run(
+        run_livekit_agent_once(
+            LiveKitConfig(
+                enabled=True,
+                url="wss://livekit.example",
+                api_key_env="TEST_LIVEKIT_API_KEY",
+                api_secret_env="TEST_LIVEKIT_API_SECRET",
+                web_debug_room_prefix="web-debug",
+            ),
+            room_name="demo",
+            identity="agent-worker",
+            duration_seconds=0,
+            audio_frame_limit=2,
+            rtc_module=rtc,
+            on_event=events.append,
+            now=1_700_000_000,
+        )
+    )
+
+    assert [event["event"] for event in events] == [
+        "audio_track_subscribed",
+        "audio_track_ignored",
+        "connected",
+        "audio_frame",
+        "audio_frame",
+        "audio_stream_completed",
+        "disconnected",
+    ]
+    assert events[1] == {
+        "event": "audio_track_ignored",
+        "room": "web-debug-demo",
+        "identity": "agent-worker",
+        "participant": "browser-user",
+        "reason": "duplicate_participant_audio",
     }
 
 
@@ -668,10 +718,18 @@ def test_audio_frame_summary_accepts_int16_memoryview():
     }
 
 
+def test_print_event_skips_audio_frame_by_default(capsys):
+    _print_event({"event": "audio_frame", "frame_index": 1})
+    _print_event({"event": "asr_final", "text": "你好"})
+
+    assert capsys.readouterr().out == '{"event": "asr_final", "text": "你好"}\n'
+
+
 class FakeRtcModule:
     def __init__(self):
         self.created_room: FakeRoom | None = None
         self.track_to_subscribe: FakeTrack | None = None
+        self.tracks_to_subscribe: list[FakeTrack] = []
         self.created_audio_sources: list[FakeAudioSource] = []
         self.TrackKind = FakeTrackKind
         self.TrackSource = FakeTrackSource
@@ -788,9 +846,12 @@ class FakeRoom:
     async def connect(self, url: str, token: str, options):
         self.connected_url = url
         self.connected_token = token
+        tracks = list(self.rtc.tracks_to_subscribe)
         if self.rtc.track_to_subscribe is not None:
+            tracks.append(self.rtc.track_to_subscribe)
+        for track in tracks:
             self._handlers["track_subscribed"](
-                self.rtc.track_to_subscribe,
+                track,
                 object(),
                 FakeParticipant("browser-user"),
             )
