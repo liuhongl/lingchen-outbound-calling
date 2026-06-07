@@ -131,3 +131,7 @@ api_key_env = "LIVEKIT_API_KEY"
 api_secret_env = "LIVEKIT_API_SECRET"
 web_debug_room_prefix = "web-debug"
 web_debug_token_ttl_seconds = 1800
+sip_outbound_real_calls_enabled = false
+sip_outbound_trunk_id = ""
+sip_outbound_caller_id = ""
+sip_outbound_room_prefix = "sip-outbound"

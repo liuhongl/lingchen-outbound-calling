@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any
 
@@ -19,14 +20,72 @@ class LiveKitSipOutboundOrchestrator:
         self,
         *,
         room_prefix: str = "sip-outbound",
+        livekit_url: str = "",
+        api_key_env: str = "LIVEKIT_API_KEY",
+        api_secret_env: str = "LIVEKIT_API_SECRET",
+        sip_outbound_real_calls_enabled: bool = False,
+        sip_outbound_trunk_id: str = "",
+        sip_outbound_caller_id: str = "",
+        env: Mapping[str, str] | None = None,
         id_factory: Callable[[], str] | None = None,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         self.room_prefix = _slug(room_prefix) or "sip-outbound"
+        self.livekit_url = _optional_text(livekit_url) or ""
+        self.api_key_env = _optional_text(api_key_env) or "LIVEKIT_API_KEY"
+        self.api_secret_env = _optional_text(api_secret_env) or "LIVEKIT_API_SECRET"
+        self.sip_outbound_real_calls_enabled = bool(sip_outbound_real_calls_enabled)
+        self.sip_outbound_trunk_id = _optional_text(sip_outbound_trunk_id) or ""
+        self.sip_outbound_caller_id = _optional_text(sip_outbound_caller_id) or ""
+        self._env = env if env is not None else os.environ
         self._id_factory = id_factory or (lambda: f"sip-{uuid.uuid4().hex[:12]}")
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._lock = threading.Lock()
         self._calls: dict[str, dict[str, Any]] = {}
+
+    def preflight(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = payload or {}
+        destination = _optional_text(payload.get("destination"))
+        destination_valid = destination is None
+        if destination is not None:
+            destination_valid = bool(_SAFE_DESTINATION_RE.match(destination))
+
+        missing: list[str] = []
+        if not self.livekit_url:
+            missing.append("livekit.url")
+        if not _optional_text(self._env.get(self.api_key_env)):
+            missing.append("livekit.api_key")
+        if not _optional_text(self._env.get(self.api_secret_env)):
+            missing.append("livekit.api_secret")
+        if not self.sip_outbound_trunk_id:
+            missing.append("livekit.sip_outbound_trunk_id")
+        if not self.sip_outbound_caller_id:
+            missing.append("livekit.sip_outbound_caller_id")
+        if not self.sip_outbound_real_calls_enabled:
+            missing.append("livekit.sip_outbound_real_calls_enabled")
+        if destination is not None and not destination_valid:
+            missing.append("destination")
+
+        warnings: list[str] = []
+        if destination is not None and not destination.startswith("+"):
+            warnings.append(
+                "destination should use E.164 format, for example +8613800138000"
+            )
+
+        return {
+            "ready": not missing,
+            "real_call_enabled": self.sip_outbound_real_calls_enabled,
+            "destination": destination,
+            "destination_valid": destination_valid,
+            "room_preview": (
+                f"{self.room_prefix}-"
+                f"{_slug(_optional_text(payload.get('call_id')) or 'preview')}"
+            ),
+            "trunk_id": self.sip_outbound_trunk_id,
+            "caller_id": self.sip_outbound_caller_id,
+            "missing": missing,
+            "warnings": warnings,
+        }
 
     def create_outbound(self, payload: dict[str, Any]) -> dict[str, Any]:
         destination = _required_destination(payload.get("destination"))

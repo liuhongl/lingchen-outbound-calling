@@ -145,6 +145,10 @@ def test_load_config_from_toml(tmp_path):
             api_secret_env = "TEST_LIVEKIT_API_SECRET"
             web_debug_room_prefix = "web-debug"
             web_debug_token_ttl_seconds = 900
+            sip_outbound_real_calls_enabled = true
+            sip_outbound_trunk_id = "trunk_abc"
+            sip_outbound_caller_id = "+861055500000"
+            sip_outbound_room_prefix = "sip-prod"
             """
         ),
         encoding="utf-8",
@@ -235,6 +239,10 @@ def test_load_config_from_toml(tmp_path):
     assert config.livekit.api_secret_env == "TEST_LIVEKIT_API_SECRET"
     assert config.livekit.web_debug_room_prefix == "web-debug"
     assert config.livekit.web_debug_token_ttl_seconds == 900
+    assert config.livekit.sip_outbound_real_calls_enabled is True
+    assert config.livekit.sip_outbound_trunk_id == "trunk_abc"
+    assert config.livekit.sip_outbound_caller_id == "+861055500000"
+    assert config.livekit.sip_outbound_room_prefix == "sip-prod"
 
 
 def test_environment_overrides(monkeypatch):
@@ -314,6 +322,10 @@ def test_environment_overrides(monkeypatch):
     monkeypatch.setenv("LIVEKIT_API_SECRET_ENV", "ENV_LIVEKIT_API_SECRET")
     monkeypatch.setenv("LIVEKIT_WEB_DEBUG_ROOM_PREFIX", "env-web-debug")
     monkeypatch.setenv("LIVEKIT_WEB_DEBUG_TOKEN_TTL_SECONDS", "1200")
+    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_REAL_CALLS_ENABLED", "true")
+    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_TRUNK_ID", "env-trunk")
+    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_CALLER_ID", "+861055599999")
+    monkeypatch.setenv("LIVEKIT_SIP_OUTBOUND_ROOM_PREFIX", "env-sip")
 
     config = load_config()
 
@@ -390,6 +402,10 @@ def test_environment_overrides(monkeypatch):
     assert config.livekit.api_secret_env == "ENV_LIVEKIT_API_SECRET"
     assert config.livekit.web_debug_room_prefix == "env-web-debug"
     assert config.livekit.web_debug_token_ttl_seconds == 1200
+    assert config.livekit.sip_outbound_real_calls_enabled is True
+    assert config.livekit.sip_outbound_trunk_id == "env-trunk"
+    assert config.livekit.sip_outbound_caller_id == "+861055599999"
+    assert config.livekit.sip_outbound_room_prefix == "env-sip"
 
 
 def test_human_transcript_requires_recording_enabled(monkeypatch):

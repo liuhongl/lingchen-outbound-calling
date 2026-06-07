@@ -907,6 +907,42 @@ def test_livekit_sip_outbound_dry_run_create_get_and_list():
         thread.join(timeout=3)
 
 
+def test_livekit_sip_outbound_preflight_returns_readiness_without_dialing():
+    manager = FakeLiveKitSipOutboundOrchestrator()
+    config = GatewayConfig(
+        server=ServerConfig(host="127.0.0.1", port=0),
+        livekit=LiveKitConfig(enabled=True, url="wss://livekit.example"),
+    )
+    server = HealthServer(config, livekit_sip_outbound_orchestrator=manager)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/sip/outbound/preflight",
+            data=json.dumps({"destination": "+8613800138000"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        assert response.status == 200
+        assert payload == {
+            "status": "ok",
+            "preflight": {
+                "ready": False,
+                "missing": ["livekit.sip_outbound_trunk_id"],
+            },
+        }
+        assert manager.preflight_payloads == [{"destination": "+8613800138000"}]
+        assert manager.created_payloads == []
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
 def test_livekit_sip_outbound_real_dial_returns_501_until_wired():
     config = GatewayConfig(
         server=ServerConfig(host="127.0.0.1", port=0),
@@ -2200,7 +2236,15 @@ class FakeLiveKitAgentManager:
 class FakeLiveKitSipOutboundOrchestrator:
     def __init__(self) -> None:
         self.created_payloads = []
+        self.preflight_payloads = []
         self.calls = {}
+
+    def preflight(self, payload):
+        self.preflight_payloads.append(payload)
+        return {
+            "ready": False,
+            "missing": ["livekit.sip_outbound_trunk_id"],
+        }
 
     def create_outbound(self, payload):
         self.created_payloads.append(payload)

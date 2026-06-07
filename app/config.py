@@ -179,6 +179,10 @@ class LiveKitConfig:
     api_secret_env: str = "LIVEKIT_API_SECRET"
     web_debug_room_prefix: str = "web-debug"
     web_debug_token_ttl_seconds: int = 1800
+    sip_outbound_real_calls_enabled: bool = False
+    sip_outbound_trunk_id: str = ""
+    sip_outbound_caller_id: str = ""
+    sip_outbound_room_prefix: str = "sip-outbound"
 
 
 @dataclass(frozen=True)
@@ -798,6 +802,30 @@ def load_config(path: str | Path | None = None) -> GatewayConfig:
                 "web_debug_token_ttl_seconds",
                 default=LiveKitConfig.web_debug_token_ttl_seconds,
             ),
+            sip_outbound_real_calls_enabled=_get_bool(
+                raw,
+                "livekit",
+                "sip_outbound_real_calls_enabled",
+                default=LiveKitConfig.sip_outbound_real_calls_enabled,
+            ),
+            sip_outbound_trunk_id=_get(
+                raw,
+                "livekit",
+                "sip_outbound_trunk_id",
+                default=LiveKitConfig.sip_outbound_trunk_id,
+            ),
+            sip_outbound_caller_id=_get(
+                raw,
+                "livekit",
+                "sip_outbound_caller_id",
+                default=LiveKitConfig.sip_outbound_caller_id,
+            ),
+            sip_outbound_room_prefix=_get(
+                raw,
+                "livekit",
+                "sip_outbound_room_prefix",
+                default=LiveKitConfig.sip_outbound_room_prefix,
+            ),
         ),
     )
     config = _apply_env_overrides(config)
@@ -1277,6 +1305,22 @@ def _apply_env_overrides(config: GatewayConfig) -> GatewayConfig:
                 "LIVEKIT_WEB_DEBUG_TOKEN_TTL_SECONDS",
                 config.livekit.web_debug_token_ttl_seconds,
             ),
+            sip_outbound_real_calls_enabled=_env_bool(
+                "LIVEKIT_SIP_OUTBOUND_REAL_CALLS_ENABLED",
+                config.livekit.sip_outbound_real_calls_enabled,
+            ),
+            sip_outbound_trunk_id=os.getenv(
+                "LIVEKIT_SIP_OUTBOUND_TRUNK_ID",
+                config.livekit.sip_outbound_trunk_id,
+            ),
+            sip_outbound_caller_id=os.getenv(
+                "LIVEKIT_SIP_OUTBOUND_CALLER_ID",
+                config.livekit.sip_outbound_caller_id,
+            ),
+            sip_outbound_room_prefix=os.getenv(
+                "LIVEKIT_SIP_OUTBOUND_ROOM_PREFIX",
+                config.livekit.sip_outbound_room_prefix,
+            ),
         ),
     )
 
@@ -1425,3 +1469,7 @@ def _validate_livekit_config(config: LiveKitConfig) -> None:
             raise ValueError("livekit.api_secret_env is required when enabled")
         if not config.web_debug_room_prefix.strip():
             raise ValueError("livekit.web_debug_room_prefix is required when enabled")
+        if not config.sip_outbound_room_prefix.strip():
+            raise ValueError(
+                "livekit.sip_outbound_room_prefix is required when enabled"
+            )

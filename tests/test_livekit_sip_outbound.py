@@ -75,6 +75,54 @@ def test_create_outbound_rejects_real_dial_before_sip_is_wired():
     assert manager.list_outbound() == []
 
 
+def test_preflight_reports_missing_real_outbound_configuration():
+    manager = LiveKitSipOutboundOrchestrator(
+        livekit_url="wss://livekit.example",
+        api_key_env="TEST_LIVEKIT_API_KEY",
+        api_secret_env="TEST_LIVEKIT_API_SECRET",
+        env={"TEST_LIVEKIT_API_KEY": "key"},
+    )
+
+    preflight = manager.preflight({"destination": "+8613800138000"})
+
+    assert preflight["ready"] is False
+    assert preflight["real_call_enabled"] is False
+    assert preflight["destination_valid"] is True
+    assert preflight["missing"] == [
+        "livekit.api_secret",
+        "livekit.sip_outbound_trunk_id",
+        "livekit.sip_outbound_caller_id",
+        "livekit.sip_outbound_real_calls_enabled",
+    ]
+    assert preflight["warnings"] == []
+
+
+def test_preflight_accepts_real_outbound_configuration_without_dialing():
+    manager = LiveKitSipOutboundOrchestrator(
+        room_prefix="sip-prod",
+        livekit_url="wss://livekit.example",
+        api_key_env="TEST_LIVEKIT_API_KEY",
+        api_secret_env="TEST_LIVEKIT_API_SECRET",
+        sip_outbound_real_calls_enabled=True,
+        sip_outbound_trunk_id="trunk_abc",
+        sip_outbound_caller_id="+861055500000",
+        env={
+            "TEST_LIVEKIT_API_KEY": "key",
+            "TEST_LIVEKIT_API_SECRET": "secret",
+        },
+    )
+
+    preflight = manager.preflight({"destination": "+8613800138000"})
+
+    assert preflight["ready"] is True
+    assert preflight["real_call_enabled"] is True
+    assert preflight["destination_valid"] is True
+    assert preflight["missing"] == []
+    assert preflight["room_preview"].startswith("sip-prod-")
+    assert preflight["trunk_id"] == "trunk_abc"
+    assert preflight["caller_id"] == "+861055500000"
+
+
 def test_create_outbound_requires_destination():
     manager = LiveKitSipOutboundOrchestrator()
 

@@ -102,7 +102,17 @@ class HealthServer:
             livekit_sip_outbound_orchestrator
             is _DEFAULT_LIVEKIT_SIP_OUTBOUND_ORCHESTRATOR
         ):
-            livekit_sip_outbound_orchestrator = LiveKitSipOutboundOrchestrator()
+            livekit_sip_outbound_orchestrator = LiveKitSipOutboundOrchestrator(
+                room_prefix=config.livekit.sip_outbound_room_prefix,
+                livekit_url=config.livekit.url,
+                api_key_env=config.livekit.api_key_env,
+                api_secret_env=config.livekit.api_secret_env,
+                sip_outbound_real_calls_enabled=(
+                    config.livekit.sip_outbound_real_calls_enabled
+                ),
+                sip_outbound_trunk_id=config.livekit.sip_outbound_trunk_id,
+                sip_outbound_caller_id=config.livekit.sip_outbound_caller_id,
+            )
         if livekit_post_call_result_store is _DEFAULT_LIVEKIT_POST_CALL_RESULT_STORE:
             livekit_post_call_result_store = LiveKitPostCallResultStore()
         handler = self._make_handler(
@@ -627,6 +637,41 @@ class HealthServer:
                     self._send_json(
                         HTTPStatus.CREATED,
                         {"status": "ok", **session},
+                    )
+                    return
+
+                if parsed.path == "/livekit/sip/outbound/preflight":
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit disabled",
+                            },
+                        )
+                        return
+                    if livekit_sip_outbound_orchestrator is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit SIP outbound disabled",
+                            },
+                        )
+                        return
+                    try:
+                        preflight = livekit_sip_outbound_orchestrator.preflight(
+                            self._read_json_body()
+                        )
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"status": "ok", "preflight": preflight},
                     )
                     return
 
