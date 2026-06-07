@@ -169,6 +169,20 @@
         font-size: 12px;
       }
 
+      .agent-control {
+        display: grid;
+        gap: 10px;
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+      }
+
+      .agent-control h2 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.3;
+      }
+
       .status {
         min-height: 44px;
         border-radius: 6px;
@@ -336,6 +350,14 @@
             </div>
             <div class="mic-hint" id="micHint">加入后显示本地输入强度</div>
           </section>
+          <section class="agent-control" aria-label="Agent 控制">
+            <h2>Agent</h2>
+            <div class="status" id="agentStatus">Agent 未启动</div>
+            <div class="actions">
+              <button type="button" id="startAgentButton">启动 Agent</button>
+              <button class="secondary" type="button" id="stopAgentButton">停止 Agent</button>
+            </div>
+          </section>
         </form>
 
         <section class="panel">
@@ -369,6 +391,9 @@
       const micValue = document.getElementById("micValue");
       const micMeterFill = document.getElementById("micMeterFill");
       const micHint = document.getElementById("micHint");
+      const agentStatus = document.getElementById("agentStatus");
+      const startAgentButton = document.getElementById("startAgentButton");
+      const stopAgentButton = document.getElementById("stopAgentButton");
       let room = null;
       let remoteAudioElements = new Map();
       let trackEvents = [];
@@ -376,6 +401,9 @@
       let agentEventCursor = 0;
       let agentEventPollTimer = 0;
       let activeAgentEventRoom = "";
+      let agentStatusPollTimer = 0;
+      let currentSessionRoom = "";
+      let currentAgentRoom = "";
       let micMonitor = null;
 
       function setStatus(text, kind = "") {
@@ -536,6 +564,112 @@
           };
           agentEvents.push(fallback);
           renderAgentEvents();
+        }
+      }
+
+      function setAgentStatus(text, kind = "") {
+        agentStatus.textContent = text;
+        agentStatus.className = `status ${kind}`.trim();
+      }
+
+      function renderAgentStatus(agent) {
+        if (!agent || !agent.room) {
+          setAgentStatus("Agent 未启动");
+          return;
+        }
+        currentAgentRoom = agent.room;
+        if (agent.running) {
+          const already = agent.alreadyRunning ? "，已在运行" : "";
+          setAgentStatus(`Agent 运行中：${agent.room} · pid ${agent.pid}${already}`, "ok");
+          return;
+        }
+        if (agent.returncode !== null && agent.returncode !== undefined) {
+          const stderr = Array.isArray(agent.stderrTail) && agent.stderrTail.length
+            ? ` · ${agent.stderrTail.at(-1)}`
+            : "";
+          setAgentStatus(`Agent 已退出：${agent.room} · code ${agent.returncode}${stderr}`, "error");
+          return;
+        }
+        setAgentStatus(`Agent 未启动：${agent.room}`);
+      }
+
+      function formRoomValue() {
+        return document.getElementById("room").value.trim() || "demo";
+      }
+
+      function targetAgentRoom() {
+        return currentSessionRoom || currentAgentRoom || formRoomValue();
+      }
+
+      function startAgentStatusPolling(roomName) {
+        stopAgentStatusPolling();
+        currentAgentRoom = roomName;
+        refreshAgentStatus(roomName);
+        agentStatusPollTimer = window.setInterval(() => refreshAgentStatus(roomName), 2000);
+      }
+
+      function stopAgentStatusPolling() {
+        if (!agentStatusPollTimer) return;
+        window.clearInterval(agentStatusPollTimer);
+        agentStatusPollTimer = 0;
+      }
+
+      async function refreshAgentStatus(roomName = targetAgentRoom()) {
+        if (!roomName) return;
+        try {
+          const response = await fetch(
+            apiUrl(`/livekit/web-debug/agent/status?room=${encodeURIComponent(roomName)}`)
+          );
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "agent status failed");
+          renderAgentStatus(payload.agent);
+        } catch (error) {
+          setAgentStatus(`Agent 状态不可用：${errorMessage(error)}`, "error");
+        }
+      }
+
+      async function startAgent() {
+        startAgentButton.disabled = true;
+        try {
+          const roomName = targetAgentRoom();
+          setAgentStatus(`正在启动 Agent：${roomName}`);
+          const response = await fetch(apiUrl("/livekit/web-debug/agent/start"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              room: roomName,
+              pipeline: "public-cloud",
+            }),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "agent start failed");
+          renderAgentStatus(payload.agent);
+          startAgentStatusPolling(payload.agent.room);
+          startAgentEventPolling(payload.agent.room);
+        } catch (error) {
+          setAgentStatus(`Agent 启动失败：${errorMessage(error)}`, "error");
+        } finally {
+          startAgentButton.disabled = false;
+        }
+      }
+
+      async function stopAgent() {
+        stopAgentButton.disabled = true;
+        try {
+          const roomName = targetAgentRoom();
+          const response = await fetch(apiUrl("/livekit/web-debug/agent/stop"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ room: roomName }),
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "agent stop failed");
+          renderAgentStatus(payload.agent);
+          stopAgentStatusPolling();
+        } catch (error) {
+          setAgentStatus(`Agent 停止失败：${errorMessage(error)}`, "error");
+        } finally {
+          stopAgentButton.disabled = false;
         }
       }
 
@@ -722,7 +856,9 @@
           );
           if (!response.ok) throw new Error(session.error || "session create failed");
           if (!window.LivekitClient) throw new Error("LiveKit browser SDK 未加载");
+          currentSessionRoom = session.room;
           startAgentEventPolling(session.room);
+          startAgentStatusPolling(session.room);
 
           room = new LivekitClient.Room();
           room.on(LivekitClient.RoomEvent.ParticipantConnected, renderParticipants);
@@ -755,6 +891,8 @@
       });
 
       leaveButton.addEventListener("click", leaveRoom);
+      startAgentButton.addEventListener("click", startAgent);
+      stopAgentButton.addEventListener("click", stopAgent);
 
       async function leaveRoom() {
         stopMicrophoneMonitor();
@@ -774,6 +912,7 @@
       }
 
       loadLiveKitStatus();
+      refreshAgentStatus(formRoomValue());
       renderTrackEvents();
       renderAgentEvents();
     </script>

@@ -71,13 +71,17 @@ class LiveKitWebDebugSessionFactory:
         }
 
     def _room_name(self, value: object) -> str:
-        prefix = _slug(self.config.web_debug_room_prefix) or "web-debug"
-        suffix = _slug(value)
-        if not suffix or suffix == prefix:
-            return prefix
-        if suffix.startswith(f"{prefix}-"):
-            return suffix
-        return f"{prefix}-{suffix}"
+        return livekit_web_debug_room_name(self.config, value)
+
+
+def livekit_web_debug_room_name(config: LiveKitConfig, value: object) -> str:
+    prefix = _slug(config.web_debug_room_prefix) or "web-debug"
+    suffix = _slug(value)
+    if not suffix or suffix == prefix:
+        return prefix
+    if suffix.startswith(f"{prefix}-"):
+        return suffix
+    return f"{prefix}-{suffix}"
 
 
 def _encode_jwt(payload: dict[str, Any], secret: str) -> str:

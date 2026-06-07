@@ -25,10 +25,15 @@ from .call_control import (
 )
 from .config import GatewayConfig
 from .livekit_debug_events import LiveKitDebugEventStore
-from .livekit_web_debug import LiveKitWebDebugSessionFactory
+from .livekit_agent_process import LiveKitAgentProcessManager
+from .livekit_web_debug import (
+    LiveKitWebDebugSessionFactory,
+    livekit_web_debug_room_name,
+)
 
 LOGGER = logging.getLogger(__name__)
 AgentCallRequester = Callable[[dict[str, Any]], dict[str, Any]]
+_DEFAULT_LIVEKIT_AGENT_MANAGER = object()
 
 DOCS = {
     "handoff": {
@@ -75,15 +80,19 @@ class HealthServer:
         call_manager: OutboundCallManager | None = None,
         browser_prompt_store: BrowserPromptTestStore | None = None,
         webrtc_agent_call_requester: AgentCallRequester | None = None,
+        livekit_agent_manager: Any | None | object = _DEFAULT_LIVEKIT_AGENT_MANAGER,
     ):
         self.config = config
         self.call_manager = call_manager
         self.browser_prompt_store = browser_prompt_store
+        if livekit_agent_manager is _DEFAULT_LIVEKIT_AGENT_MANAGER:
+            livekit_agent_manager = LiveKitAgentProcessManager()
         handler = self._make_handler(
             config,
             call_manager=call_manager,
             browser_prompt_store=browser_prompt_store,
             webrtc_agent_call_requester=webrtc_agent_call_requester,
+            livekit_agent_manager=livekit_agent_manager,
         )
         self._server = ThreadingHTTPServer(
             (config.server.host, config.server.port),
@@ -111,6 +120,7 @@ class HealthServer:
         call_manager: OutboundCallManager | None = None,
         browser_prompt_store: BrowserPromptTestStore | None = None,
         webrtc_agent_call_requester: AgentCallRequester | None = None,
+        livekit_agent_manager: Any | None = None,
     ) -> type[BaseHTTPRequestHandler]:
         agent_call_requester = webrtc_agent_call_requester or (
             lambda payload: originate_webrtc_agent_test_call(config, payload)
@@ -191,6 +201,38 @@ class HealthServer:
 
                 if parsed.path == "/livekit-web-debug":
                     self._send_html(HTTPStatus.OK, _load_livekit_web_debug_html())
+                    return
+
+                if parsed.path == "/livekit/web-debug/agent/status":
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit web debug disabled",
+                            },
+                        )
+                        return
+                    if livekit_agent_manager is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit agent manager disabled",
+                            },
+                        )
+                        return
+                    room = livekit_web_debug_room_name(
+                        config.livekit,
+                        _query_str(parsed.query, "room"),
+                    )
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "status": "ok",
+                            "agent": livekit_agent_manager.status(room),
+                        },
+                    )
                     return
 
                 if parsed.path == "/livekit/web-debug/events":
@@ -429,6 +471,91 @@ class HealthServer:
                     self._send_json(
                         HTTPStatus.CREATED,
                         {"status": "ok", **session},
+                    )
+                    return
+
+                if parsed.path == "/livekit/web-debug/agent/start":
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit web debug disabled",
+                            },
+                        )
+                        return
+                    if livekit_agent_manager is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit agent manager disabled",
+                            },
+                        )
+                        return
+                    try:
+                        payload = self._read_json_body()
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    payload = {
+                        **payload,
+                        "room": livekit_web_debug_room_name(
+                            config.livekit,
+                            payload.get("room"),
+                        ),
+                        "pipeline": str(payload.get("pipeline") or "public-cloud"),
+                        "event_sink_url": (
+                            str(payload.get("event_sink_url") or "").strip()
+                            or f"{self._request_origin()}/livekit/web-debug/events"
+                        ),
+                    }
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {
+                            "status": "ok",
+                            "agent": livekit_agent_manager.start(payload),
+                        },
+                    )
+                    return
+
+                if parsed.path == "/livekit/web-debug/agent/stop":
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit web debug disabled",
+                            },
+                        )
+                        return
+                    if livekit_agent_manager is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit agent manager disabled",
+                            },
+                        )
+                        return
+                    try:
+                        payload = self._read_json_body()
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    room = livekit_web_debug_room_name(config.livekit, payload.get("room"))
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {
+                            "status": "ok",
+                            "agent": livekit_agent_manager.stop(room),
+                        },
                     )
                     return
 
@@ -744,6 +871,13 @@ class HealthServer:
                 self.send_header("Location", location)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+
+            def _request_origin(self) -> str:
+                host = str(self.headers.get("Host") or "").strip()
+                if not host:
+                    server_host, server_port = self.server.server_address[:2]
+                    host = f"{server_host}:{server_port}"
+                return f"http://{host}"
 
         return Handler
 

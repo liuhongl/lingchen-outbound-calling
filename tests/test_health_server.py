@@ -738,6 +738,109 @@ def test_livekit_web_debug_page_is_served():
         assert "/livekit/web-debug/events" in body
         assert "pollAgentEvents" in body
         assert "renderLatencySummary" in body
+        assert 'id="startAgentButton"' in body
+        assert 'id="stopAgentButton"' in body
+        assert 'id="agentStatus"' in body
+        assert "/livekit/web-debug/agent/start" in body
+        assert "/livekit/web-debug/agent/stop" in body
+        assert "/livekit/web-debug/agent/status" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_web_debug_agent_control_returns_503_when_disabled():
+    config = GatewayConfig(
+        server=ServerConfig(host="127.0.0.1", port=0),
+        livekit=LiveKitConfig(enabled=True, url="wss://livekit.example"),
+    )
+    server = HealthServer(config, livekit_agent_manager=None)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/web-debug/agent/start",
+            data=json.dumps({"room": "web-debug-demo"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urlopen(request, timeout=3)
+        except HTTPError as err:
+            payload = json.loads(err.read().decode("utf-8"))
+            assert err.code == 503
+            assert payload == {
+                "status": "unavailable",
+                "error": "livekit agent manager disabled",
+            }
+        else:
+            raise AssertionError("expected disabled agent manager to return 503")
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_web_debug_agent_control_start_status_and_stop(monkeypatch):
+    monkeypatch.setenv("TEST_LIVEKIT_API_KEY", "api-key")
+    monkeypatch.setenv("TEST_LIVEKIT_API_SECRET", "secret-value")
+    manager = FakeLiveKitAgentManager()
+    config = GatewayConfig(
+        server=ServerConfig(host="127.0.0.1", port=0),
+        livekit=LiveKitConfig(
+            enabled=True,
+            url="wss://livekit.example",
+            api_key_env="TEST_LIVEKIT_API_KEY",
+            api_secret_env="TEST_LIVEKIT_API_SECRET",
+            web_debug_room_prefix="web-debug",
+        ),
+    )
+    server = HealthServer(config, livekit_agent_manager=manager)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/web-debug/agent/start",
+            data=json.dumps({"room": "demo"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            started = json.loads(response.read().decode("utf-8"))
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/web-debug/agent/status?room=web-debug-demo",
+            timeout=3,
+        ) as response:
+            status = json.loads(response.read().decode("utf-8"))
+
+        stop_request = Request(
+            f"http://{host}:{port}/livekit/web-debug/agent/stop",
+            data=json.dumps({"room": "web-debug-demo"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(stop_request, timeout=3) as response:
+            stopped = json.loads(response.read().decode("utf-8"))
+
+        assert started["status"] == "ok"
+        assert started["agent"]["room"] == "web-debug-demo"
+        assert started["agent"]["running"] is True
+        assert started["agent"]["pipeline"] == "public-cloud"
+        assert status["agent"]["room"] == "web-debug-demo"
+        assert status["agent"]["running"] is True
+        assert stopped["agent"]["running"] is False
+        assert manager.started_payloads == [
+            {
+                "room": "web-debug-demo",
+                "pipeline": "public-cloud",
+                "event_sink_url": f"http://{host}:{port}/livekit/web-debug/events",
+            }
+        ]
+        assert manager.stopped_rooms == ["web-debug-demo"]
     finally:
         server.shutdown()
         thread.join(timeout=3)
@@ -1746,3 +1849,39 @@ class FakeCallManager:
             "status": "completed",
             "handoff": {"human_transcript_status": "completed"},
         }
+
+
+class FakeLiveKitAgentManager:
+    def __init__(self) -> None:
+        self.started_payloads = []
+        self.stopped_rooms = []
+        self.agents = {}
+
+    def start(self, payload):
+        self.started_payloads.append(payload)
+        agent = {
+            "room": payload["room"],
+            "running": True,
+            "pipeline": payload["pipeline"],
+            "pid": 1234,
+        }
+        self.agents[payload["room"]] = agent
+        return agent
+
+    def status(self, room):
+        return self.agents.get(room) or {
+            "room": room,
+            "running": False,
+            "status": "not_started",
+        }
+
+    def stop(self, room):
+        self.stopped_rooms.append(room)
+        agent = {
+            "room": room,
+            "running": False,
+            "pipeline": "public-cloud",
+            "pid": 1234,
+        }
+        self.agents[room] = agent
+        return agent
