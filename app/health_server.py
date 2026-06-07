@@ -24,6 +24,7 @@ from .call_control import (
     originate_webrtc_agent_test_call,
 )
 from .config import GatewayConfig
+from .livekit_web_debug import LiveKitWebDebugSessionFactory
 
 LOGGER = logging.getLogger(__name__)
 AgentCallRequester = Callable[[dict[str, Any]], dict[str, Any]]
@@ -153,6 +154,7 @@ class HealthServer:
                                 "handoff": asdict(config.handoff),
                                 "flow_callback": asdict(config.flow_callback),
                                 "rocketmq": asdict(config.rocketmq),
+                                "livekit": _livekit_public_config(config),
                                 "outbound": {
                                     "enabled": config.outbound.enabled,
                                     "endpoint_template": (
@@ -183,6 +185,10 @@ class HealthServer:
 
                 if parsed.path == "/webrtc-agent-test":
                     self._send_html(HTTPStatus.OK, _load_webrtc_agent_test_html())
+                    return
+
+                if parsed.path == "/livekit-web-debug":
+                    self._send_html(HTTPStatus.OK, _load_livekit_web_debug_html())
                     return
 
                 if parsed.path == "/vendor/jssip.min.js":
@@ -365,6 +371,39 @@ class HealthServer:
                     self._send_json(
                         HTTPStatus.ACCEPTED,
                         {"status": "accepted", **result},
+                    )
+                    return
+
+                if parsed.path == "/livekit/web-debug/session":
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit web debug disabled",
+                            },
+                        )
+                        return
+                    try:
+                        session = LiveKitWebDebugSessionFactory(
+                            config.livekit
+                        ).create_session(self._read_json_body())
+                    except RuntimeError as err:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {"status": "unavailable", "error": str(err)},
+                        )
+                        return
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+
+                    self._send_json(
+                        HTTPStatus.CREATED,
+                        {"status": "ok", **session},
                     )
                     return
 
@@ -898,6 +937,23 @@ def _load_webrtc_agent_test_html() -> str:
         / "webrtc-agent-test.html"
     )
     return html_path.read_text(encoding="utf-8")
+
+
+def _load_livekit_web_debug_html() -> str:
+    html_path = (
+        Path(__file__).resolve().parent.parent / "static" / "livekit-web-debug.html"
+    )
+    return html_path.read_text(encoding="utf-8")
+
+
+def _livekit_public_config(config: GatewayConfig) -> dict[str, Any]:
+    livekit = config.livekit
+    return {
+        "enabled": livekit.enabled,
+        "url": livekit.url,
+        "web_debug_room_prefix": livekit.web_debug_room_prefix,
+        "web_debug_token_ttl_seconds": livekit.web_debug_token_ttl_seconds,
+    }
 
 
 def _load_vendor_asset(filename: str) -> bytes:

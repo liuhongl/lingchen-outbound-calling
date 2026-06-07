@@ -123,3 +123,11 @@ timeout_seconds = 180.0
 
 [handoff]
 wait_timeout_seconds = 180
+
+[livekit]
+enabled = false
+url = "ws://127.0.0.1:7880"
+api_key_env = "LIVEKIT_API_KEY"
+api_secret_env = "LIVEKIT_API_SECRET"
+web_debug_room_prefix = "web-debug"
+web_debug_token_ttl_seconds = 1800

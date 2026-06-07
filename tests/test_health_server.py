@@ -11,6 +11,7 @@ from app.config import (
     GatewayConfig,
     HandoffConfig,
     HumanTranscriptConfig,
+    LiveKitConfig,
     RocketMQAclConfig,
     RocketMQConfig,
     ServerConfig,
@@ -156,6 +157,41 @@ def test_ready_endpoint_exposes_handoff_config():
 
         assert response.status == 200
         assert payload["config"]["handoff"] == {"wait_timeout_seconds": 12}
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_ready_endpoint_exposes_livekit_non_secret_config():
+    config = GatewayConfig(
+        server=ServerConfig(host="127.0.0.1", port=0),
+        livekit=LiveKitConfig(
+            enabled=True,
+            url="wss://livekit.example",
+            api_key_env="LIVEKIT_API_KEY",
+            api_secret_env="LIVEKIT_API_SECRET",
+            web_debug_room_prefix="web-debug",
+            web_debug_token_ttl_seconds=900,
+        ),
+    )
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        with urlopen(f"http://{host}:{port}/ready", timeout=3) as response:
+            body = response.read().decode("utf-8")
+            payload = json.loads(body)
+
+        assert response.status == 200
+        assert payload["config"]["livekit"] == {
+            "enabled": True,
+            "url": "wss://livekit.example",
+            "web_debug_room_prefix": "web-debug",
+            "web_debug_token_ttl_seconds": 900,
+        }
+        assert "secret-value" not in body
     finally:
         server.shutdown()
         thread.join(timeout=3)
@@ -659,6 +695,124 @@ def test_browser_realtime_test_page_is_served():
         assert 'class="check-line"' in body
         assert 'href="/outbound-test"' in body
         assert 'class="active" href="/browser-realtime-test" aria-current="page"' in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_web_debug_page_is_served():
+    config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        with urlopen(f"http://{host}:{port}/livekit-web-debug", timeout=3) as response:
+            body = response.read().decode("utf-8")
+
+        assert response.status == 200
+        assert "LiveKit Web 调试" in body
+        assert "/livekit/web-debug/session" in body
+        assert "loadLiveKitStatus" in body
+        assert 'fetch(apiUrl("/ready")' in body
+        assert "LiveKit 未启用" in body
+        assert "麦克风不可用" in body
+        assert "requestMicrophoneAccess" in body
+        assert "请求麦克风权限" in body
+        assert "当前浏览器不支持 getUserMedia" in body
+        assert "Microphone" in body
+        assert 'id="micMeterFill"' in body
+        assert "startMicrophoneMonitor" in body
+        assert "检测到本地麦克风输入" in body
+        assert "LivekitClient" in body
+        assert 'id="remoteAudioTracks"' in body
+        assert 'id="remoteTrackEvents"' in body
+        assert "Remote Audio" in body
+        assert "track.attach()" in body
+        assert "RoomEvent.TrackSubscribed" in body
+        assert "trackSubscribed" in body
+        assert "remote_audio_track_subscribed" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_web_debug_session_returns_503_when_disabled():
+    config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/web-debug/session",
+            data=json.dumps({}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urlopen(request, timeout=3)
+        except HTTPError as err:
+            payload = json.loads(err.read().decode("utf-8"))
+            assert err.code == 503
+            assert payload == {
+                "status": "unavailable",
+                "error": "livekit web debug disabled",
+            }
+        else:
+            raise AssertionError("expected disabled LiveKit debug session to return 503")
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_web_debug_session_returns_join_token(monkeypatch):
+    monkeypatch.setenv("TEST_LIVEKIT_API_KEY", "api-key")
+    monkeypatch.setenv("TEST_LIVEKIT_API_SECRET", "secret-value")
+    config = GatewayConfig(
+        server=ServerConfig(host="127.0.0.1", port=0),
+        livekit=LiveKitConfig(
+            enabled=True,
+            url="wss://livekit.example",
+            api_key_env="TEST_LIVEKIT_API_KEY",
+            api_secret_env="TEST_LIVEKIT_API_SECRET",
+            web_debug_room_prefix="web-debug",
+            web_debug_token_ttl_seconds=900,
+        ),
+    )
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/web-debug/session",
+            data=json.dumps(
+                {
+                    "room": "demo",
+                    "identity": "browser",
+                    "name": "Web 用户",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            body = response.read().decode("utf-8")
+            payload = json.loads(body)
+
+        assert response.status == 201
+        assert payload["status"] == "ok"
+        assert payload["livekitUrl"] == "wss://livekit.example"
+        assert payload["room"] == "web-debug-demo"
+        assert payload["identity"] == "browser"
+        assert payload["name"] == "Web 用户"
+        assert payload["token"].count(".") == 2
+        assert payload["expiresAt"] > 0
+        assert "secret-value" not in body
     finally:
         server.shutdown()
         thread.join(timeout=3)

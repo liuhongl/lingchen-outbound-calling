@@ -137,6 +137,14 @@ def test_load_config_from_toml(tmp_path):
             min_pool_size = 1
             max_pool_size = 7
             command_timeout_seconds = 3.5
+
+            [livekit]
+            enabled = true
+            url = "wss://livekit.example"
+            api_key_env = "TEST_LIVEKIT_API_KEY"
+            api_secret_env = "TEST_LIVEKIT_API_SECRET"
+            web_debug_room_prefix = "web-debug"
+            web_debug_token_ttl_seconds = 900
             """
         ),
         encoding="utf-8",
@@ -221,6 +229,12 @@ def test_load_config_from_toml(tmp_path):
     assert config.postgres.dsn_env == "TEST_POSTGRES_DSN"
     assert config.postgres.max_pool_size == 7
     assert config.postgres.command_timeout_seconds == 3.5
+    assert config.livekit.enabled is True
+    assert config.livekit.url == "wss://livekit.example"
+    assert config.livekit.api_key_env == "TEST_LIVEKIT_API_KEY"
+    assert config.livekit.api_secret_env == "TEST_LIVEKIT_API_SECRET"
+    assert config.livekit.web_debug_room_prefix == "web-debug"
+    assert config.livekit.web_debug_token_ttl_seconds == 900
 
 
 def test_environment_overrides(monkeypatch):
@@ -294,6 +308,12 @@ def test_environment_overrides(monkeypatch):
     monkeypatch.setenv("POSTGRES_MAX_POOL_SIZE", "9")
     monkeypatch.setenv("POSTGRES_COMMAND_TIMEOUT_SECONDS", "2.5")
     monkeypatch.setenv("INBOUND_RMS_DIAGNOSTICS_ENABLED", "true")
+    monkeypatch.setenv("LIVEKIT_ENABLED", "true")
+    monkeypatch.setenv("LIVEKIT_URL", "wss://env-livekit.example")
+    monkeypatch.setenv("LIVEKIT_API_KEY_ENV", "ENV_LIVEKIT_API_KEY")
+    monkeypatch.setenv("LIVEKIT_API_SECRET_ENV", "ENV_LIVEKIT_API_SECRET")
+    monkeypatch.setenv("LIVEKIT_WEB_DEBUG_ROOM_PREFIX", "env-web-debug")
+    monkeypatch.setenv("LIVEKIT_WEB_DEBUG_TOKEN_TTL_SECONDS", "1200")
 
     config = load_config()
 
@@ -364,6 +384,12 @@ def test_environment_overrides(monkeypatch):
     assert config.postgres.dsn_env == "LOCAL_POSTGRES_DSN"
     assert config.postgres.max_pool_size == 9
     assert config.postgres.command_timeout_seconds == 2.5
+    assert config.livekit.enabled is True
+    assert config.livekit.url == "wss://env-livekit.example"
+    assert config.livekit.api_key_env == "ENV_LIVEKIT_API_KEY"
+    assert config.livekit.api_secret_env == "ENV_LIVEKIT_API_SECRET"
+    assert config.livekit.web_debug_room_prefix == "env-web-debug"
+    assert config.livekit.web_debug_token_ttl_seconds == 1200
 
 
 def test_human_transcript_requires_recording_enabled(monkeypatch):
@@ -478,3 +504,14 @@ def test_rejects_invalid_flow_callback_http_path(tmp_path):
 
     with pytest.raises(ValueError, match="flow_callback.http.path"):
         load_config(config_file)
+
+
+def test_livekit_web_debug_token_ttl_must_be_positive(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_WEB_DEBUG_TOKEN_TTL_SECONDS", "0")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config()
+
+    assert "livekit.web_debug_token_ttl_seconds must be positive" in str(
+        exc_info.value
+    )

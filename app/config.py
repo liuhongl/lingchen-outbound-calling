@@ -172,6 +172,16 @@ class RocketMQConfig:
 
 
 @dataclass(frozen=True)
+class LiveKitConfig:
+    enabled: bool = False
+    url: str = "ws://127.0.0.1:7880"
+    api_key_env: str = "LIVEKIT_API_KEY"
+    api_secret_env: str = "LIVEKIT_API_SECRET"
+    web_debug_room_prefix: str = "web-debug"
+    web_debug_token_ttl_seconds: int = 1800
+
+
+@dataclass(frozen=True)
 class GatewayConfig:
     server: ServerConfig = ServerConfig()
     logging: LoggingConfig = LoggingConfig()
@@ -189,6 +199,7 @@ class GatewayConfig:
     handoff: HandoffConfig = HandoffConfig()
     flow_callback: FlowCallbackConfig = FlowCallbackConfig()
     rocketmq: RocketMQConfig = RocketMQConfig()
+    livekit: LiveKitConfig = LiveKitConfig()
 
 
 def load_config(path: str | Path | None = None) -> GatewayConfig:
@@ -750,6 +761,44 @@ def load_config(path: str | Path | None = None) -> GatewayConfig:
                 ),
             ),
         ),
+        livekit=LiveKitConfig(
+            enabled=_get_bool(
+                raw,
+                "livekit",
+                "enabled",
+                default=LiveKitConfig.enabled,
+            ),
+            url=_get(
+                raw,
+                "livekit",
+                "url",
+                default=LiveKitConfig.url,
+            ),
+            api_key_env=_get(
+                raw,
+                "livekit",
+                "api_key_env",
+                default=LiveKitConfig.api_key_env,
+            ),
+            api_secret_env=_get(
+                raw,
+                "livekit",
+                "api_secret_env",
+                default=LiveKitConfig.api_secret_env,
+            ),
+            web_debug_room_prefix=_get(
+                raw,
+                "livekit",
+                "web_debug_room_prefix",
+                default=LiveKitConfig.web_debug_room_prefix,
+            ),
+            web_debug_token_ttl_seconds=_get_int(
+                raw,
+                "livekit",
+                "web_debug_token_ttl_seconds",
+                default=LiveKitConfig.web_debug_token_ttl_seconds,
+            ),
+        ),
     )
     config = _apply_env_overrides(config)
     _validate_media_contract(config.freeswitch)
@@ -760,6 +809,7 @@ def load_config(path: str | Path | None = None) -> GatewayConfig:
     _validate_flow_callback_config(config.flow_callback)
     _validate_cross_feature_config(config)
     _validate_rocketmq_config(config.rocketmq)
+    _validate_livekit_config(config.livekit)
     return config
 
 
@@ -1211,6 +1261,23 @@ def _apply_env_overrides(config: GatewayConfig) -> GatewayConfig:
                 ),
             ),
         ),
+        livekit=LiveKitConfig(
+            enabled=_env_bool("LIVEKIT_ENABLED", config.livekit.enabled),
+            url=os.getenv("LIVEKIT_URL", config.livekit.url),
+            api_key_env=os.getenv("LIVEKIT_API_KEY_ENV", config.livekit.api_key_env),
+            api_secret_env=os.getenv(
+                "LIVEKIT_API_SECRET_ENV",
+                config.livekit.api_secret_env,
+            ),
+            web_debug_room_prefix=os.getenv(
+                "LIVEKIT_WEB_DEBUG_ROOM_PREFIX",
+                config.livekit.web_debug_room_prefix,
+            ),
+            web_debug_token_ttl_seconds=_env_int(
+                "LIVEKIT_WEB_DEBUG_TOKEN_TTL_SECONDS",
+                config.livekit.web_debug_token_ttl_seconds,
+            ),
+        ),
     )
 
 
@@ -1344,3 +1411,17 @@ def _validate_rocketmq_config(config: RocketMQConfig) -> None:
             raise ValueError("rocketmq.callback_topic is required when enabled")
         if not config.producer_group.strip():
             raise ValueError("rocketmq.producer_group is required when enabled")
+
+
+def _validate_livekit_config(config: LiveKitConfig) -> None:
+    if config.web_debug_token_ttl_seconds <= 0:
+        raise ValueError("livekit.web_debug_token_ttl_seconds must be positive")
+    if config.enabled:
+        if not config.url.strip():
+            raise ValueError("livekit.url is required when enabled")
+        if not config.api_key_env.strip():
+            raise ValueError("livekit.api_key_env is required when enabled")
+        if not config.api_secret_env.strip():
+            raise ValueError("livekit.api_secret_env is required when enabled")
+        if not config.web_debug_room_prefix.strip():
+            raise ValueError("livekit.web_debug_room_prefix is required when enabled")
