@@ -30,10 +30,12 @@ from .livekit_web_debug import (
     LiveKitWebDebugSessionFactory,
     livekit_web_debug_room_name,
 )
+from .livekit_sip_outbound import LiveKitSipOutboundOrchestrator
 
 LOGGER = logging.getLogger(__name__)
 AgentCallRequester = Callable[[dict[str, Any]], dict[str, Any]]
 _DEFAULT_LIVEKIT_AGENT_MANAGER = object()
+_DEFAULT_LIVEKIT_SIP_OUTBOUND_ORCHESTRATOR = object()
 
 DOCS = {
     "handoff": {
@@ -81,18 +83,27 @@ class HealthServer:
         browser_prompt_store: BrowserPromptTestStore | None = None,
         webrtc_agent_call_requester: AgentCallRequester | None = None,
         livekit_agent_manager: Any | None | object = _DEFAULT_LIVEKIT_AGENT_MANAGER,
+        livekit_sip_outbound_orchestrator: Any
+        | None
+        | object = _DEFAULT_LIVEKIT_SIP_OUTBOUND_ORCHESTRATOR,
     ):
         self.config = config
         self.call_manager = call_manager
         self.browser_prompt_store = browser_prompt_store
         if livekit_agent_manager is _DEFAULT_LIVEKIT_AGENT_MANAGER:
             livekit_agent_manager = LiveKitAgentProcessManager()
+        if (
+            livekit_sip_outbound_orchestrator
+            is _DEFAULT_LIVEKIT_SIP_OUTBOUND_ORCHESTRATOR
+        ):
+            livekit_sip_outbound_orchestrator = LiveKitSipOutboundOrchestrator()
         handler = self._make_handler(
             config,
             call_manager=call_manager,
             browser_prompt_store=browser_prompt_store,
             webrtc_agent_call_requester=webrtc_agent_call_requester,
             livekit_agent_manager=livekit_agent_manager,
+            livekit_sip_outbound_orchestrator=livekit_sip_outbound_orchestrator,
         )
         self._server = ThreadingHTTPServer(
             (config.server.host, config.server.port),
@@ -121,6 +132,7 @@ class HealthServer:
         browser_prompt_store: BrowserPromptTestStore | None = None,
         webrtc_agent_call_requester: AgentCallRequester | None = None,
         livekit_agent_manager: Any | None = None,
+        livekit_sip_outbound_orchestrator: Any | None = None,
     ) -> type[BaseHTTPRequestHandler]:
         agent_call_requester = webrtc_agent_call_requester or (
             lambda payload: originate_webrtc_agent_test_call(config, payload)
@@ -201,6 +213,79 @@ class HealthServer:
 
                 if parsed.path == "/livekit-web-debug":
                     self._send_html(HTTPStatus.OK, _load_livekit_web_debug_html())
+                    return
+
+                if parsed.path == "/livekit/sip/outbound":
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit disabled",
+                            },
+                        )
+                        return
+                    if livekit_sip_outbound_orchestrator is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit SIP outbound disabled",
+                            },
+                        )
+                        return
+                    limit = _query_int(parsed.query, "limit", default=50)
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "status": "ok",
+                            "outbounds": (
+                                livekit_sip_outbound_orchestrator.list_outbound(
+                                    limit=limit
+                                )
+                            ),
+                        },
+                    )
+                    return
+
+                livekit_sip_call_id = _livekit_sip_outbound_call_id_from_path(
+                    parsed.path
+                )
+                if livekit_sip_call_id is not None:
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit disabled",
+                            },
+                        )
+                        return
+                    if livekit_sip_outbound_orchestrator is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit SIP outbound disabled",
+                            },
+                        )
+                        return
+                    outbound = livekit_sip_outbound_orchestrator.get_outbound(
+                        livekit_sip_call_id
+                    )
+                    if outbound is None:
+                        self._send_json(
+                            HTTPStatus.NOT_FOUND,
+                            {
+                                "status": "not_found",
+                                "call_id": livekit_sip_call_id,
+                            },
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {"status": "ok", "outbound": outbound},
+                    )
                     return
 
                 if parsed.path == "/livekit/web-debug/agent/status":
@@ -471,6 +556,47 @@ class HealthServer:
                     self._send_json(
                         HTTPStatus.CREATED,
                         {"status": "ok", **session},
+                    )
+                    return
+
+                if parsed.path == "/livekit/sip/outbound":
+                    if not config.livekit.enabled:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit disabled",
+                            },
+                        )
+                        return
+                    if livekit_sip_outbound_orchestrator is None:
+                        self._send_json(
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            {
+                                "status": "unavailable",
+                                "error": "livekit SIP outbound disabled",
+                            },
+                        )
+                        return
+                    try:
+                        outbound = livekit_sip_outbound_orchestrator.create_outbound(
+                            self._read_json_body()
+                        )
+                    except CallControlError as err:
+                        self._send_json(
+                            HTTPStatus(err.status_code),
+                            {"status": "error", "error": str(err)},
+                        )
+                        return
+                    except json.JSONDecodeError:
+                        self._send_json(
+                            HTTPStatus.BAD_REQUEST,
+                            {"status": "error", "error": "invalid JSON body"},
+                        )
+                        return
+                    self._send_json(
+                        HTTPStatus.ACCEPTED,
+                        {"status": "accepted", "outbound": outbound},
                     )
                     return
 
@@ -898,6 +1024,16 @@ def _recording_call_id_from_path(path: str) -> str | None:
     if not path.startswith(prefix) or not path.endswith(suffix):
         return None
     call_id = path[len(prefix) : -len(suffix)].strip("/")
+    if not call_id or "/" in call_id:
+        return None
+    return call_id
+
+
+def _livekit_sip_outbound_call_id_from_path(path: str) -> str | None:
+    prefix = "/livekit/sip/outbound/"
+    if not path.startswith(prefix):
+        return None
+    call_id = path[len(prefix) :].strip("/")
     if not call_id or "/" in call_id:
         return None
     return call_id

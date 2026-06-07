@@ -847,6 +847,104 @@ def test_livekit_web_debug_agent_control_start_status_and_stop(monkeypatch):
         thread.join(timeout=3)
 
 
+def test_livekit_sip_outbound_dry_run_create_get_and_list():
+    manager = FakeLiveKitSipOutboundOrchestrator()
+    config = GatewayConfig(
+        server=ServerConfig(host="127.0.0.1", port=0),
+        livekit=LiveKitConfig(enabled=True, url="wss://livekit.example"),
+    )
+    server = HealthServer(config, livekit_sip_outbound_orchestrator=manager)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/sip/outbound",
+            data=json.dumps(
+                {
+                    "destination": "+8613800138000",
+                    "business_id": "debt-001",
+                    "dry_run": True,
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=3) as response:
+            created = json.loads(response.read().decode("utf-8"))
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/sip/outbound/sip-test-1",
+            timeout=3,
+        ) as response:
+            fetched = json.loads(response.read().decode("utf-8"))
+
+        with urlopen(
+            f"http://{host}:{port}/livekit/sip/outbound",
+            timeout=3,
+        ) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+
+        assert response.status == 200
+        assert created["status"] == "accepted"
+        assert created["outbound"]["call_id"] == "sip-test-1"
+        assert created["outbound"]["status"] == "created"
+        assert created["outbound"]["dry_run"] is True
+        assert fetched["status"] == "ok"
+        assert fetched["outbound"] == created["outbound"]
+        assert listed["status"] == "ok"
+        assert listed["outbounds"] == [created["outbound"]]
+        assert manager.created_payloads == [
+            {
+                "destination": "+8613800138000",
+                "business_id": "debt-001",
+                "dry_run": True,
+            }
+        ]
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_livekit_sip_outbound_real_dial_returns_501_until_wired():
+    config = GatewayConfig(
+        server=ServerConfig(host="127.0.0.1", port=0),
+        livekit=LiveKitConfig(enabled=True, url="wss://livekit.example"),
+    )
+    server = HealthServer(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.address
+        request = Request(
+            f"http://{host}:{port}/livekit/sip/outbound",
+            data=json.dumps(
+                {
+                    "destination": "+8613800138000",
+                    "dry_run": False,
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urlopen(request, timeout=3)
+        except HTTPError as err:
+            payload = json.loads(err.read().decode("utf-8"))
+            assert err.code == 501
+            assert payload == {
+                "status": "error",
+                "error": "LiveKit SIP real outbound is not wired yet",
+            }
+        else:
+            raise AssertionError("expected real LiveKit SIP dial to return 501")
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+
+
 def test_livekit_web_debug_events_accepts_and_lists_agent_events():
     config = GatewayConfig(server=ServerConfig(host="127.0.0.1", port=0))
     server = HealthServer(config)
@@ -1886,3 +1984,28 @@ class FakeLiveKitAgentManager:
         }
         self.agents[room] = agent
         return agent
+
+
+class FakeLiveKitSipOutboundOrchestrator:
+    def __init__(self) -> None:
+        self.created_payloads = []
+        self.calls = {}
+
+    def create_outbound(self, payload):
+        self.created_payloads.append(payload)
+        call = {
+            "call_id": "sip-test-1",
+            "business_id": payload.get("business_id"),
+            "destination": payload.get("destination"),
+            "room": "sip-outbound-sip-test-1",
+            "status": "created",
+            "dry_run": payload.get("dry_run"),
+        }
+        self.calls[call["call_id"]] = call
+        return call
+
+    def get_outbound(self, call_id):
+        return self.calls.get(call_id)
+
+    def list_outbound(self, *, limit=50):
+        return list(self.calls.values())[:limit]
