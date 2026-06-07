@@ -18,6 +18,17 @@ _RAW_DOMESTIC_MOBILE_HINT = (
     "current SIP provider requires raw domestic mobile numbers, "
     "for example 18518968743; do not add +86, 86, 0, or 9 prefix"
 )
+_CURRENT_PROVIDER_PROFILE = {
+    "sip_proxy": "47.94.86.132:5089",
+    "transport": "UDP",
+    "caller_id": _CURRENT_PROVIDER_CALLER_ID,
+    "destination_format": "raw_domestic_mobile",
+    "destination_example": "18518968743",
+    "codec": "PCMA/8000",
+    "dtmf": "telephone-event/RFC2833",
+    "dtmf_payload": 101,
+    "rtp_profile": "RTP/AVP",
+}
 
 
 class LiveKitSipOutboundOrchestrator:
@@ -96,6 +107,7 @@ class LiveKitSipOutboundOrchestrator:
             ),
             "trunk_id": self.sip_outbound_trunk_id,
             "caller_id": self.sip_outbound_caller_id,
+            "provider_profile": deepcopy(_CURRENT_PROVIDER_PROFILE),
             "missing": missing,
             "invalid": invalid,
             "warnings": warnings,

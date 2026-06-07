@@ -123,6 +123,17 @@ def test_preflight_accepts_real_outbound_configuration_without_dialing():
     assert preflight["room_preview"].startswith("sip-prod-")
     assert preflight["trunk_id"] == "trunk_abc"
     assert preflight["caller_id"] == "037123124845"
+    assert preflight["provider_profile"] == {
+        "sip_proxy": "47.94.86.132:5089",
+        "transport": "UDP",
+        "caller_id": "037123124845",
+        "destination_format": "raw_domestic_mobile",
+        "destination_example": "18518968743",
+        "codec": "PCMA/8000",
+        "dtmf": "telephone-event/RFC2833",
+        "dtmf_payload": 101,
+        "rtp_profile": "RTP/AVP",
+    }
 
 
 def test_preflight_rejects_e164_destination_for_current_provider():

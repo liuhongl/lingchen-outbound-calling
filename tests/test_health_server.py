@@ -933,6 +933,17 @@ def test_livekit_sip_outbound_preflight_returns_readiness_without_dialing():
             "status": "ok",
             "preflight": {
                 "ready": False,
+                "provider_profile": {
+                    "sip_proxy": "47.94.86.132:5089",
+                    "transport": "UDP",
+                    "caller_id": "037123124845",
+                    "destination_format": "raw_domestic_mobile",
+                    "destination_example": "18518968743",
+                    "codec": "PCMA/8000",
+                    "dtmf": "telephone-event/RFC2833",
+                    "dtmf_payload": 101,
+                    "rtp_profile": "RTP/AVP",
+                },
                 "missing": ["livekit.sip_outbound_trunk_id"],
             },
         }
@@ -2243,6 +2254,17 @@ class FakeLiveKitSipOutboundOrchestrator:
         self.preflight_payloads.append(payload)
         return {
             "ready": False,
+            "provider_profile": {
+                "sip_proxy": "47.94.86.132:5089",
+                "transport": "UDP",
+                "caller_id": "037123124845",
+                "destination_format": "raw_domestic_mobile",
+                "destination_example": "18518968743",
+                "codec": "PCMA/8000",
+                "dtmf": "telephone-event/RFC2833",
+                "dtmf_payload": 101,
+                "rtp_profile": "RTP/AVP",
+            },
             "missing": ["livekit.sip_outbound_trunk_id"],
         }
 
