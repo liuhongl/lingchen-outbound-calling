@@ -1173,6 +1173,29 @@ Agent 能听能说
 
 这一阶段只证明线路和媒体，不承诺业务回调、录音归档和批量外呼。
 
+B-4 真实外呼 smoke 建议使用脚本执行，默认只跑 preflight，不会拨号：
+
+```bash
+scripts/livekit-real-outbound-smoke.sh --destination 18518968743
+```
+
+确认测试手机号当前允许拨打后，再显式加确认参数发送 `dry_run=false`：
+
+```bash
+scripts/livekit-real-outbound-smoke.sh \
+  --destination 18518968743 \
+  --business-id manual-real-call-001 \
+  --confirm-real-call
+```
+
+执行时同步记录三层结果：
+
+1. 本项目接口返回：`call_id`、`room`、`status`、`events`。
+2. LiveKit Cloud `Telephony / Calls`：是否出现 outbound call，SIP participant 是否进入 Room。
+3. 服务商 / SIP 结果码：例如 `200 OK`、`403`、`488`、`503`，以及是否出现双向 `PCMA/8000` RTP。
+
+如果 preflight 不为 ready 或号码格式不是国内原始手机号，禁止执行真实拨号。
+
 ### 阶段 C：业务 API 和状态机迁移
 
 目标：把现有 `/calls`、业务 ID、状态机、prompt/opening、`call_record` 和 callback 接到 LiveKit 执行器。
